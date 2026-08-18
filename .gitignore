@@ -9,17 +9,4 @@ tmp/
 *_verify.log
 _verify.log
 
-# Raw IMU data and generated analysis outputs are large/local artifacts.
-huayi_data/
-LINS16460_data/
-LINS355_data/
-yuanshen_data/
-
-# Common generated report/media outputs.
-analysis_results/
-*.png
-*.jpg
-*.jpeg
-*.csv
-*.bin
-*.txt
+# Python/generated cache and temporary artifacts stay local.
