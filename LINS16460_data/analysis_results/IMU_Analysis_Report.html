@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMU数据分析报告 — 无锡凌思 LINS16460</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        h1 {
+            text-align: center;
+            color: #1a202c;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #718096;
+            margin-bottom: 30px;
+        }
+        .info-box {
+            background: #edf2f7;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 25px;
+        }
+        .info-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 8px;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+        }
+        .info-label {
+            font-weight: bold;
+            color: #4a5568;
+        }
+        .info-value {
+            color: #2d3748;
+        }
+        .image-section {
+            margin-top: 30px;
+        }
+        .image-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 15px;
+        }
+        .result-image {
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        .stats-table th, .stats-table td {
+            border: 1px solid #e2e8f0;
+            padding: 12px;
+            text-align: left;
+        }
+        .stats-table th {
+            background: #667eea;
+            color: white;
+        }
+        .stats-table tr:nth-child(even) {
+            background: #f7fafc;
+        }
+        .warning {
+            color: #e53e3e;
+            background: #fff5f5;
+            padding: 10px;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>IMU 数据分析报告 — 无锡凌思 LINS16460</h1>
+        <p class="subtitle">Powered by IMU Analysis Toolkit | 无锡凌思 LINS16460</p>
+
+        <div class='info-box'>
+            <div class='info-title'>数据基本信息</div>
+            <div class='info-grid'>
+                <div class='info-item'><span class='info-label'>数据坏行策略:</span><span class='info-value'>字段数异常严格报错；六轴非数值或非有限行单独计数后剔除，不插值</span></div>
+                <div class='info-item'><span class='info-label'>源数据行数:</span><span class='info-value'>720117</span></div>
+                <div class='info-item'><span class='info-label'>六轴非数值或非有限行数:</span><span class='info-value'>0</span></div>
+                <div class='info-item'><span class='info-label'>数值坏行处理:</span><span class='info-value'>无</span></div>
+                <div class='info-item'><span class='info-label'>掐头去尾:</span><span class='info-value'>丢弃头尾各 1.0 分钟 (共 24000 点 / 720117 点，保留率 96.7%)</span></div>
+                <div class='info-item'><span class='info-label'>采样率:</span><span class='info-value'>200.0 Hz</span></div>
+                <div class='info-item'><span class='info-label'>采样率来源:</span><span class='info-value'>user_config_not_file_verified；LINS16460 文件无逐样本时间戳/帧号，采样率由用户输入或程序配置，不能由该文件独立验证</span></div>
+                <div class='info-item'><span class='info-label'>总数据点数:</span><span class='info-value'>696117 点</span></div>
+                <div class='info-item'><span class='info-label'>采样时长:</span><span class='info-value'>3480.59 秒 (58.01 分钟)</span></div>
+                <div class='info-item'><span class='info-label'>数据文件:</span><span class='info-value'>16460.txt</span></div>
+                <div class='info-item'><span class='info-label'>分析时间:</span><span class='info-value'>2026-08-18 16:36:03</span></div>
+                <div class='info-item'><span class='info-label'>温度范围:</span><span class='info-value'>22.25 ~ 23.62°C</span></div>
+                <div class='info-item'><span class='info-label'>平均温度:</span><span class='info-value'>22.76°C</span></div>
+                <div class='info-item'><span class='info-label'>10s分段统计口径:</span><span class='info-value'>全量保留观测行；10 s非重叠分段均值的总体标准差(ddof=0)；工程统计量</span></div>
+                <div class='info-item'><span class='info-label'>Allan分析配置:</span><span class='info-value'>估计器=ADEV（经典非重叠）；输入=全量保留观测行；采样率=200 Hz；未线性去趋势、未插值；显示网格=每十倍程约15点并保留全部octave锚点；BI/RW/最低ADEV等效参考的参数提取网格=octave；n_terms的20/5分级仅为本项目工程可视化门槛，非标准规定</span></div>
+                <div class='info-item'><span class='info-label'>Allan曲线支持项显示:</span><span class='info-value'>n_terms≥20正常显示；5≤n_terms<20提醒显示；n_terms<5低支持尾部；20/5为本项目工程可视化门槛，非标准规定</span></div>
+                <div class='info-item'><span class='info-label'>Allan显示网格:</span><span class='info-value'>nominal 15 points/decade plus octave anchors；仅增加显示和曲线CSV细节，未进行曲线平滑</span></div>
+                <div class='info-item'><span class='info-label'>Allan参数提取网格:</span><span class='info-value'>octave；BI、RW及最低ADEV等效参考均只使用该独立网格</span></div>
+                <div class='info-item'><span class='info-label'>Allan预处理:</span><span class='info-value'>原始速率序列（加速度 m/s²、陀螺 °/s）；未减均值、未线性去趋势</span></div>
+                <div class='info-item'><span class='info-label'>Allan时基限制:</span><span class='info-value'>源文件无逐样本时间戳/帧号；按用户配置采样率和保留观测行等间隔计算；无法由文件判断缺帧，未重建缺失时间点</span></div>
+            </div>
+        </div>
+
+        <div class='info-box'>
+            <div class='info-title'>统计摘要</div>
+            <table class='stats-table'>
+                <tr><th>轴</th><th>均值</th><th>标准差</th><th>RMS</th></tr>
+                <tr><td>加速度计X轴</td><td>-0.001950 m/s²</td><td>0.032682 m/s²</td><td>0.032740 m/s²</td></tr>
+                <tr><td>加速度计Y轴</td><td>0.039137 m/s²</td><td>0.029008 m/s²</td><td>0.048715 m/s²</td></tr>
+                <tr><td>加速度计Z轴</td><td>-9.804903 m/s²</td><td>0.036176 m/s²</td><td>9.804969 m/s²</td></tr>
+                <tr><td>陀螺仪X轴</td><td>-0.022442 °/s</td><td>0.419618 °/s</td><td>0.420218 °/s</td></tr>
+                <tr><td>陀螺仪Y轴</td><td>0.022419 °/s</td><td>0.333217 °/s</td><td>0.333971 °/s</td></tr>
+                <tr><td>陀螺仪Z轴</td><td>-0.001330 °/s</td><td>0.418434 °/s</td><td>0.418436 °/s</td></tr>
+            </table>
+        </div>
+
+        <div class='info-box'>
+            <div class='info-title'>Allan 偏差与零偏结果</div>
+            <table class='stats-table'>
+                <tr><th>指标</th><th>传感器</th><th>方法/口径</th><th>X轴</th><th>Y轴</th><th>Z轴</th></tr>
+                <tr><td><b>正式零偏不稳定性 BI</b></td><td>陀螺仪</td><td>估计器=ADEV（经典非重叠）；输入=全量保留观测行；采样率=200 Hz；未线性去趋势、未插值；显示网格=每十倍程约15点并保留全部octave锚点；BI/RW/最低ADEV等效参考的参数提取网格=octave；n_terms的20/5分级仅为本项目工程可视化门槛，非标准规定<br>B=σ平台/0.66428；连续近零斜率平台<br>门槛为本项目工程判据</td><td>N/A<br>未找到同时满足的连续平台：abs(3点拟合斜率)<=0.10、max|相邻斜率|<=0.15、log10残差RMS<=0.03（本项目工程判据）</td><td>N/A<br>未找到同时满足的连续平台：abs(3点拟合斜率)<=0.10、max|相邻斜率|<=0.15、log10残差RMS<=0.03（本项目工程判据）</td><td>N/A<br>未找到同时满足的连续平台：abs(3点拟合斜率)<=0.10、max|相邻斜率|<=0.15、log10残差RMS<=0.03（本项目工程判据）</td></tr>
+                <tr><td><b>最低 ADEV 等效参考</b><br><span style='color:#b83280;'>非正式 BI</span></td><td>陀螺仪</td><td>tau≥1 s、n_terms≥20；σmin/0.66428<br>不用于规格判定</td><td>参考值，非正式BI<br>3.773109e-03 °/s<br>1.358319e+01 °/h<br>2.370714e-01 rad/h<br>tau=163.84 s；n_terms=20；局部斜率=-0.376；候选范围边界<br>不用于规格合格判定</td><td>参考值，非正式BI<br>1.991276e-03 °/s<br>7.168593e+00 °/h<br>1.251156e-01 rad/h<br>tau=163.84 s；n_terms=20；局部斜率=-0.359；候选范围边界<br>不用于规格合格判定</td><td>参考值，非正式BI<br>1.853589e-03 °/s<br>6.672920e+00 °/h<br>1.164644e-01 rad/h<br>tau=163.84 s；n_terms=20；局部斜率=-0.865；候选范围边界<br>不用于规格合格判定</td></tr>
+                <tr><td><b>ARW</b></td><td>陀螺仪</td><td>0.1～10 s斜率拟合</td><td>有效（拟合斜率=-0.458）<br>2.496237e-02 °/√s<br>1.497742e+00 °/√h<br>2.614054e-02 rad/√h<br>单边白噪声ASD等效：3.530213e-02 (°/s)/√Hz</td><td>有效（拟合斜率=-0.474）<br>1.534705e-02 °/√s<br>9.208227e-01 °/√h<br>1.607139e-02 rad/√h<br>单边白噪声ASD等效：2.170400e-02 (°/s)/√Hz</td><td>有效（拟合斜率=-0.457）<br>1.690096e-02 °/√s<br>1.014058e+00 °/√h<br>1.769864e-02 rad/√h<br>单边白噪声ASD等效：2.390157e-02 (°/s)/√Hz</td></tr>
+                <tr><td><b>10 s 分段均值标准差</b></td><td>陀螺仪</td><td>非重叠分段；ddof=0</td><td>7.114614e-03 °/s<br>2.561261e+01 °/h<br>4.470244e-01 rad/h</td><td>4.565506e-03 °/s<br>1.643582e+01 °/h<br>2.868592e-01 rad/h</td><td>5.511523e-03 °/s<br>1.984148e+01 °/h<br>3.462992e-01 rad/h</td></tr>
+                <tr><td><b>正式零偏不稳定性 BI</b></td><td>加速度计</td><td>估计器=ADEV（经典非重叠）；输入=全量保留观测行；采样率=200 Hz；未线性去趋势、未插值；显示网格=每十倍程约15点并保留全部octave锚点；BI/RW/最低ADEV等效参考的参数提取网格=octave；n_terms的20/5分级仅为本项目工程可视化门槛，非标准规定<br>B=σ平台/0.66428；连续近零斜率平台<br>门槛为本项目工程判据</td><td>N/A<br>未找到同时满足的连续平台：abs(3点拟合斜率)<=0.10、max|相邻斜率|<=0.15、log10残差RMS<=0.03（本项目工程判据）</td><td>N/A<br>未找到同时满足的连续平台：abs(3点拟合斜率)<=0.10、max|相邻斜率|<=0.15、log10残差RMS<=0.03（本项目工程判据）</td><td>N/A<br>未找到同时满足的连续平台：abs(3点拟合斜率)<=0.10、max|相邻斜率|<=0.15、log10残差RMS<=0.03（本项目工程判据）</td></tr>
+                <tr><td><b>最低 ADEV 等效参考</b><br><span style='color:#b83280;'>非正式 BI</span></td><td>加速度计</td><td>tau≥1 s、n_terms≥20；σmin/0.66428<br>不用于规格判定</td><td>参考值，非正式BI<br>7.070130e-04 m/s²<br>7.209526e-02 mg<br>7.209526e+01 μg<br>tau=163.84 s；n_terms=20；局部斜率=-0.221；候选范围边界<br>不用于规格合格判定</td><td>参考值，非正式BI<br>5.043960e-04 m/s²<br>5.143407e-02 mg<br>5.143407e+01 μg<br>tau=163.84 s；n_terms=20；局部斜率=-0.230；候选范围边界<br>不用于规格合格判定</td><td>参考值，非正式BI<br>4.793767e-04 m/s²<br>4.888282e-02 mg<br>4.888282e+01 μg<br>tau=163.84 s；n_terms=20；局部斜率=-0.622；候选范围边界<br>不用于规格合格判定</td></tr>
+                <tr><td><b>VRW</b></td><td>加速度计</td><td>0.1～10 s斜率拟合</td><td>有效（拟合斜率=-0.482）<br>2.379866e-03 m/s/√s<br>1.427920e-01 m/s/√h<br>2.426788e+02 μg·√s<br>单边白噪声ASD等效：3.431996e+02 μg/√Hz</td><td>有效（拟合斜率=-0.493）<br>2.240400e-03 m/s/√s<br>1.344240e-01 m/s/√h<br>2.284572e+02 μg·√s<br>单边白噪声ASD等效：3.230873e+02 μg/√Hz</td><td>有效（拟合斜率=-0.480）<br>2.645842e-03 m/s/√s<br>1.587505e-01 m/s/√h<br>2.698008e+02 μg·√s<br>单边白噪声ASD等效：3.815559e+02 μg/√Hz</td></tr>
+                <tr><td><b>10 s 分段均值标准差</b></td><td>加速度计</td><td>非重叠分段；ddof=0</td><td>1.306576e-03 m/s²<br>1.332337e-01 mg<br>1.332337e+02 μg</td><td>8.968753e-04 m/s²<br>9.145583e-02 mg<br>9.145583e+01 μg</td><td>1.110430e-03 m/s²<br>1.132323e-01 mg<br>1.132323e+02 μg</td></tr>
+            </table>
+        </div>
+
+        <div class='info-box'>
+            <div class='info-title'>指标定义说明</div>
+            <table class='stats-table' style='font-size:13px;'>
+                <tr><th style='background:#4a5568;'>指标名称</th><th style='background:#4a5568;'>定义</th><th style='background:#4a5568;'>计算方法</th><th style='background:#4a5568;'>依据/性质</th></tr>
+                <tr><td><b>零偏不稳定性 (BI)</b></td>
+                    <td>Allan 偏差中的 flicker/pink rate-noise 平台系数</td>
+                    <td>3个原曲线连续近零斜率点；B=σ平台/0.66428；平台识别通过不等于规格可比</td>
+                    <td>噪声模型关系与本项目工程判据；非通用合规声明</td></tr>
+                <tr><td><b>最低 ADEV 等效参考</b></td>
+                    <td>可信平台不明显时的受约束工程参考；不是 BI</td>
+                    <td>tau≥1 s且n_terms≥20的最低ADEV/0.66428；报告支持项和边界状态</td>
+                    <td>本项目工程判据；不用于规格合格判定</td></tr>
+                <tr><td><b>10 s 分段均值标准差</b></td>
+                    <td>10秒非重叠窗口均值的总体标准差</td>
+                    <td>按10 s分段后计算 std(ddof=0)</td>
+                    <td>工程统计量，条款适用性需另行核对</td></tr>
+                <tr><td><b>角度随机游走 (ARW)</b></td>
+                    <td>陀螺仪白噪声引起的角度积分随机游走</td>
+                    <td>ADEV在0.1～10 s进行log-log斜率拟合，外推至1 s</td>
+                    <td>Allan噪声模型参考</td></tr>
+                <tr><td><b>速度随机游走 (VRW)</b></td>
+                    <td>加速度计白噪声引起的速度积分随机游走</td>
+                    <td>ADEV在0.1～10 s进行log-log斜率拟合，外推至1 s</td>
+                    <td>Allan噪声模型参考</td></tr>
+            </table>
+        </div>
+
+        <div class='info-box'>
+            <div class='info-title'>不同时间窗口1σ落点半径</div>
+            <table class='stats-table'>
+                <tr><th>时间窗口</th><th>1σ落点半径</th><th>有效窗口数</th></tr>
+                <tr><td>5秒</td><td>0.018857 m</td><td>3476</td></tr>
+                <tr><td>10秒</td><td>0.081881 m</td><td>3471</td></tr>
+                <tr><td>30秒</td><td>0.938016 m</td><td>3451</td></tr>
+                <tr><td>60秒</td><td>4.125083 m</td><td>3421</td></tr>
+                <tr><td>120秒</td><td>15.739441 m</td><td>3361</td></tr>
+            </table>
+        </div>
+
+        <div class='image-section'>
+            <div class='image-title'>1. 时间序列图</div>
+            <img src='01_时间序列图.png' class='result-image' alt='1. 时间序列图' />
+        </div>
+
+        <div class='image-section'>
+            <div class='image-title'>2. 统计分布分析图</div>
+            <img src='02_统计分布分析图.png' class='result-image' alt='2. 统计分布分析图' />
+        </div>
+
+        <div class='image-section'>
+            <div class='image-title'>3. Allan偏差与零偏分析图</div>
+            <img src='03_零偏稳定性分析图.png' class='result-image' alt='3. Allan偏差与零偏分析图' />
+        </div>
+
+        <div class='image-section'>
+            <div class='image-title'>4. 功率谱密度（PSD）分析图</div>
+            <img src='04_PSD功率谱密度图.png' class='result-image' alt='4. 功率谱密度（PSD）分析图' />
+        </div>
+
+        <div class='image-section'>
+            <div class='image-title'>5. 相关性分析图</div>
+            <img src='05_相关性分析图.png' class='result-image' alt='5. 相关性分析图' />
+        </div>
+
+        <div class='image-section'>
+            <div class='image-title'>6. 长期零漂趋势图</div>
+            <img src='06_长期零漂趋势图.png' class='result-image' alt='6. 长期零漂趋势图' />
+        </div>
+
+        <div class='image-section'>
+            <div class='image-title'>7. 不同时间窗口1σ落点半径对比图</div>
+            <img src='07_不同时间窗口1σ落点半径对比图.png' class='result-image' alt='7. 不同时间窗口1σ落点半径对比图' />
+        </div>
+
+        <div class='image-section'>
+            <div class='image-title'>Allan 偏差常用单位换算参考表</div>
+            <table class='stats-table' style='font-size: 13px;'>
+                <tr><th style='background:#4a5568;'>参数</th><th style='background:#4a5568;'>计算单位</th><th style='background:#4a5568;'>换算公式</th><th style='background:#4a5568;'>目标单位</th></tr>
+                <tr><td><b>加速度计 VRW 系数 N</b></td><td>m/s/√s（即(m/s²)·√s）</td><td>N×60</td><td>m/s/√h</td></tr>
+                <tr><td><b>加速度计 BI/参考/BS</b></td><td>m/s²</td><td>×1e3/9.80665；×1e6/9.80665</td><td>mg；μg</td></tr>
+                <tr><td><b>陀螺仪 ARW 系数 N</b></td><td>°/√s</td><td>N×60；N×π/180</td><td>°/√h；rad/√s</td></tr>
+                <tr><td><b>陀螺仪 BI/参考/BS</b></td><td>°/s</td><td>×3600；×20π</td><td>°/h；rad/h</td></tr>
+                <tr><td><b>条件等效单边白噪声 ASD</b></td><td>仅限白速率噪声和0..fs/2单边PSD约定</td><td>√2×N</td><td>(输入速率单位)/√Hz</td></tr>
+            </table>
+            <div style='margin-top:10px; padding:10px; background:#f0f4f8; border-left:4px solid #667eea; font-size:13px;'>
+                <b>说明：</b><br>
+                1. ADEV单位与输入速率序列相同；RW系数的单位是输入速率单位×√s。<br>
+                2. BI仅对连续近零斜率平台计算，B=σ平台/0.66428；无平台时为N/A。<br>
+                3. 最低ADEV等效参考不是正式BI，不用于规格判定。<br>
+                4. 10 s BS是非重叠分段均值总体标准差(ddof=0)这一工程统计量。<br>
+                5. √2×N是条件等效，不是直接PSD估计，也不自动等同厂家噪声密度。
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>
