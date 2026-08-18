@@ -1,5 +1,6 @@
 # 整合的IMU分析工具箱 — 无锡凌思 LINS355 专用版
 import os, sys, datetime
+import textwrap
 
 # ---- stdout/stderr UTF-8 强制编码（修复 Windows PowerShell GBK 编码报错）----
 # PowerShell 默认 stdout 编码为 GBK/cp936，当 print() 输出含 '²°σμ√' 等特殊字符
@@ -910,8 +911,26 @@ class IMUDataAnalyzer:
                 "无法由文件判断缺帧，未重建缺失时间点"
             )
 
-            fig, axes = plt.subplots(2, 3, figsize=(22, 12))
-            axes = axes.flatten()
+            # 与参考实现保持相同的“曲线 + 独立数值说明”结构，避免结果文字
+            # 遮挡 Allan 曲线；曲线区宽高比固定为 6:4。
+            fig = plt.figure(figsize=(24, 21), constrained_layout=False)
+            outer_grid = fig.add_gridspec(
+                2, 3, left=0.045, right=0.985, top=0.975, bottom=0.115,
+                wspace=0.18, hspace=0.22,
+            )
+            axes, info_axes = [], []
+            for plot_index in range(6):
+                cell = outer_grid[plot_index // 3, plot_index % 3].subgridspec(
+                    2, 1, height_ratios=[3.15, 1.85], hspace=0.20,
+                )
+                curve_ax = fig.add_subplot(cell[0])
+                curve_ax.set_label(f"allan_curve_{plot_index}")
+                curve_ax.set_box_aspect(4 / 6)
+                info_ax = fig.add_subplot(cell[1])
+                info_ax.set_label(f"allan_info_{plot_index}")
+                info_ax.set_axis_off()
+                axes.append(curve_ax)
+                info_axes.append(info_ax)
             colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
             names = ["acc_x(m/s²)", "acc_y(m/s²)", "acc_z(m/s²)",
                      "gyro_x(°/s)", "gyro_y(°/s)", "gyro_z(°/s)"]
@@ -956,6 +975,7 @@ class IMUDataAnalyzer:
                         "单边ASD_(°/s)/√Hz": asd}
 
             for i, ax in enumerate(axes):
+                info_ax = info_axes[i]
                 sensor = "acc" if i < 3 else "gyro"
                 axis = ["x", "y", "z"][i if i < 3 else i - 3]
                 col = f"{sensor}_{axis}"
@@ -966,6 +986,8 @@ class IMUDataAnalyzer:
                     if np.count_nonzero(finite) < 100:
                         ax.text(0.5, 0.5, "数据不足", ha="center", va="center",
                                 transform=ax.transAxes)
+                        info_ax.text(0.5, 0.5, "无可用数值说明", ha="center", va="center",
+                                     fontsize=7, color="#666666", transform=info_ax.transAxes)
                         continue
                     data = raw[finite]
                     display_tau_request = self._build_allan_display_tau_grid(
@@ -991,6 +1013,8 @@ class IMUDataAnalyzer:
                     if not np.any(valid) or not np.any(valid_estimation):
                         ax.text(0.5, 0.5, "计算失败", ha="center", va="center",
                                 transform=ax.transAxes)
+                        info_ax.text(0.5, 0.5, "无可用数值说明", ha="center", va="center",
+                                     fontsize=7, color="#666666", transform=info_ax.transAxes)
                         continue
                     taus_v, adev_v = display_taus[valid], display_adev[valid]
                     err_v = (display_errors[valid]
@@ -1014,17 +1038,17 @@ class IMUDataAnalyzer:
                                if min_ref_result["available"] else np.nan)
 
                     normal, caution, low = self._allan_support_masks(ns_v)
-                    ax.loglog(taus_v, adev_v, linewidth=1.6, color=colors[i], alpha=0.45)
-                    if np.any(normal):
-                        ax.loglog(taus_v[normal], adev_v[normal], linewidth=2,
-                                  color=colors[i], label=f"{method_label}（n_terms≥20）")
+                    ax.loglog(taus_v, np.where(normal, adev_v, np.nan), linewidth=1.2,
+                              linestyle="-", marker=None, color=colors[i],
+                              label=f"{method_label}：n_terms≥20")
                     if np.any(caution):
-                        ax.scatter(taus_v[caution], adev_v[caution], s=20,
-                                   facecolors="none", edgecolors="#f59e0b", marker="o",
-                                   label="支持项5～19")
+                        ax.loglog(taus_v, np.where(caution, adev_v, np.nan), linewidth=1.1,
+                                  linestyle="--", marker=None, color=colors[i], alpha=0.48,
+                                  label="提醒：5≤n_terms<20")
                     if np.any(low):
-                        ax.scatter(taus_v[low], adev_v[low], s=24, color="#9ca3af",
-                                   marker="x", label="支持项<5")
+                        ax.loglog(taus_v, np.where(low, adev_v, np.nan), linewidth=1.0,
+                                  linestyle=":", marker=None, color="#808080", alpha=0.9,
+                                  label="低支持尾部：n_terms<5")
                     idx_1s = int(np.argmin(np.abs(taus_v - 1.0)))
                     if taus_v.min() <= 1 <= taus_v.max():
                         ax.scatter(taus_v[idx_1s], adev_v[idx_1s], color="red", s=70,
@@ -1042,30 +1066,67 @@ class IMUDataAnalyzer:
                     min_u = acc_units(min_ref) if sensor == "acc" else gyro_units(min_ref)
                     rw_u = acc_rw_units(rw) if sensor == "acc" else gyro_rw_units(rw)
                     bs_u = acc_units(bs_value) if sensor == "acc" else gyro_units(bs_value)
-                    bi_text = ("N/A（未识别到可信平台）" if not bi_result["valid"] else
-                               (fmt(bi_u["mg"], "mg") if sensor == "acc"
-                                else fmt(bi_u["°/h"], "°/h")))
-                    min_text = ("N/A" if not min_ref_result["available"] else
-                                (fmt(min_u["mg"], "mg") if sensor == "acc"
-                                 else fmt(min_u["°/h"], "°/h")))
+                    bi_status = (
+                        "边界受限（规格可比性未确认）" if bi_result.get("edge_limited") else
+                        ("平台识别通过（规格可比性未确认）" if bi_result["valid"] else "不可提取")
+                    )
                     if sensor == "acc":
-                        rw_text = fmt(rw_u["m/s/√h"], "m/s/√h")
-                        bs_text = fmt(bs_u["mg"], "mg")
+                        info = (
+                            f"VRW（斜率={rw_result['slope']:.3f}，{'有效' if rw_result['valid'] else '无效'}）:\n"
+                            f"  {fmt(rw_u['m/s/√s'], 'm/s/√s')}\n"
+                            f"  {fmt(rw_u['m/s/√h'], 'm/s/√h')}\n"
+                            f"  {fmt(rw_u['μg·√s'], 'μg·√s')}\n"
+                            f"  单边白噪声ASD等效: {fmt(rw_u['单边ASD_μg/√Hz'], 'μg/√Hz')}\n"
+                            f"BI（平台 σ/0.66428，{bi_status}）:\n"
+                            f"  {fmt(bi_u['m/s²'], 'm/s²')}\n"
+                            f"  {fmt(bi_u['mg'], 'mg')} / {fmt(bi_u['μg'], 'μg')}\n"
+                            f"最低ADEV等效参考（非正式BI）:\n"
+                            f"  {fmt(min_u['mg'], 'mg')} / {fmt(min_u['μg'], 'μg')}\n"
+                            f"  tau={fmt(min_ref_result['tau'], 's', 3)}, n={fmt(min_ref_result['n_terms'], '', 0)}, "
+                            f"局部斜率={fmt(min_ref_result['local_slope'], '', 3)}"
+                            f"{'（候选边界）' if min_ref_result['edge_limited'] else ''}\n"
+                            f"BS（10 s分段均值标准差）:\n"
+                            f"  {fmt(bs_u['m/s²'], 'm/s²')}\n"
+                            f"  {fmt(bs_u['mg'], 'mg')} / {fmt(bs_u['μg'], 'μg')}"
+                        )
+                        bi_text = (fmt(bi_u["mg"], "mg") if bi_result["valid"]
+                                   else "N/A（" + bi_result["reason"] + "）")
                     else:
-                        rw_text = fmt(rw_u["°/√h"], "°/√h")
-                        bs_text = fmt(bs_u["°/h"], "°/h")
-                    info = (f"RW: {rw_text}\n斜率: "
-                            f"{rw_result['slope']:.3f} ({'有效' if rw_result['valid'] else '无效'})\n"
-                            f"BI(平台/0.66428): {bi_text}\n"
-                            f"最低ADEV等效参考(非BI): {min_text}\n"
-                            f"BS(10s分段均值std): {bs_text}")
-                    ax.text(0.04, 0.04, info, transform=ax.transAxes, fontsize=7.5,
-                            verticalalignment="bottom",
-                            bbox=dict(boxstyle="round,pad=0.5", facecolor="wheat", alpha=0.8))
-                    ax.set_xlabel("tau (s)")
-                    ax.set_ylabel(f"Allan Deviation ({units[i]})")
+                        info = (
+                            f"ARW（斜率={rw_result['slope']:.3f}，{'有效' if rw_result['valid'] else '无效'}）:\n"
+                            f"  {fmt(rw_u['°/√s'], '°/√s')}\n"
+                            f"  {fmt(rw_u['°/√h'], '°/√h')}\n"
+                            f"  {fmt(rw_u['rad/√s'], 'rad/√s')}\n"
+                            f"  单边白噪声ASD等效: {fmt(rw_u['单边ASD_(°/s)/√Hz'], '(°/s)/√Hz')}\n"
+                            f"BI（平台 σ/0.66428，{bi_status}）:\n"
+                            f"  {fmt(bi_u['°/s'], '°/s')}\n"
+                            f"  {fmt(bi_u['°/h'], '°/h')} / {fmt(bi_u['rad/h'], 'rad/h')}\n"
+                            f"最低ADEV等效参考（非正式BI）:\n"
+                            f"  {fmt(min_u['°/h'], '°/h')} / {fmt(min_u['rad/h'], 'rad/h')}\n"
+                            f"  tau={fmt(min_ref_result['tau'], 's', 3)}, n={fmt(min_ref_result['n_terms'], '', 0)}, "
+                            f"局部斜率={fmt(min_ref_result['local_slope'], '', 3)}"
+                            f"{'（候选边界）' if min_ref_result['edge_limited'] else ''}\n"
+                            f"BS（10 s分段均值标准差）:\n"
+                            f"  {fmt(bs_u['°/s'], '°/s')}\n"
+                            f"  {fmt(bs_u['°/h'], '°/h')} / {fmt(bs_u['rad/h'], 'rad/h')}"
+                        )
+                        bi_text = (fmt(bi_u["°/h"], "°/h") if bi_result["valid"]
+                                   else "N/A（" + bi_result["reason"] + "）")
+                    if bi_result["valid"] and bi_result.get("edge_limited"):
+                        info = f"{bi_result['reason']}\n" + info
+                        bi_text += "（边界受限）"
+                    wrapped = []
+                    for line in info.splitlines():
+                        wrapped.extend(textwrap.wrap(line, width=43, break_long_words=True,
+                                                     break_on_hyphens=False) if len(line) > 43 else [line])
+                    info_ax.text(0.015, 0.985, "\n".join(wrapped), transform=info_ax.transAxes,
+                                 fontsize=6.5, linespacing=1.12, ha="left", va="top",
+                                 clip_on=True, wrap=True, color="#2f2f2f")
+                    ax.set_xlabel("tau (s)", fontsize=8)
+                    ax.set_ylabel(f"Allan Deviation ({units[i]})", fontsize=8)
+                    ax.tick_params(axis="both", which="both", labelsize=7)
                     ax.grid(True, which="both", alpha=0.3)
-                    ax.legend(fontsize=8, loc="upper right")
+                    ax.legend(fontsize=6.5, loc="best", framealpha=0.92)
 
                     entry = {"rw": rw_result, "bi": bi_result, "min_ref": min_ref_result,
                              "rw_units": rw_u, "bi_units": bi_u, "min_ref_units": min_u,
@@ -1159,19 +1220,26 @@ class IMUDataAnalyzer:
                     print(f"{names[i]} Allan偏差计算失败: {exc}")
                     ax.text(0.5, 0.5, f"计算失败\n{exc}", ha="center", va="center",
                             transform=ax.transAxes, fontsize=9)
+                    info_ax.text(0.5, 0.5, "无可用数值说明", ha="center", va="center",
+                                 fontsize=7, color="#666666", transform=info_ax.transAxes)
 
             conv = (
-                "ADEV坐标单位与输入速率相同；RW系数单位为输入速率×√s。\n"
-                "每√h换算=×60；仅在白速率噪声及0..fs/2单边PSD约定下，等效单边ASD=√2×RW，且不是直接PSD估计。\n"
-                "正式BI只由连续近零斜率平台计算：B=σ平台/0.66428；最低ADEV折算值只是参考，不用于规格判定。\n"
-                "10 s BS为非重叠分段均值总体标准差；平台与最低点门槛为本项目工程判据，不是标准强制值。\n"
-                "n_terms 20/5分级仅为本项目工程可视化门槛，非标准规定。"
+                "Allan 偏差（ADEV）结果与常用单位换算参考\n"
+                "图中坐标保持：加速度 ADEV=m/s²，陀螺 ADEV=°/s，tau=s\n"
+                "加速度 VRW系数N：m/s/√s → m/s/√h=×60；→ μg·√s=×1e6/9.80665\n"
+                "陀螺 ARW系数N：°/√s → °/√h=×60；→ rad/√s=×π/180；rad/√h=×π/3\n"
+                "条件等效单边白噪声ASD=√2×N；仅限白速率噪声及0..fs/2单边PSD约定，不是直接谱估计。\n"
+                "加速度 BI/BS：m/s² → g=/9.80665；mg=×1e3/9.80665；μg=×1e6/9.80665\n"
+                "陀螺 BI/BS：°/s → °/h=×3600；rad/s=×π/180；rad/h=×20π\n"
+                "BI仅在连续近零斜率平台计算：B=σ平台/0.66428；最低ADEV等效参考非正式BI，不用于规格判定。\n"
+                "曲线不做后处理平滑；n_terms>=20正常实线，5..19淡色虚线，<5灰色低支持尾部；"
+                "20/5为工程可视化门槛，非标准规定。"
             )
-            fig.text(0.5, -0.02, conv, ha="center", va="top", fontsize=7.5,
-                     bbox=dict(boxstyle="round,pad=0.8", facecolor="#f5f5dc", alpha=0.95))
-            plt.tight_layout(rect=[0, 0.09, 1, 1])
+            fig.text(0.5, 0.012, conv, ha="center", va="bottom", fontsize=6.0,
+                     bbox=dict(boxstyle="round,pad=0.8", facecolor="#f5f5dc",
+                               edgecolor="#888888", alpha=0.95))
             save_path = os.path.join(self.save_dir, "03_零偏稳定性分析图.png")
-            plt.savefig(save_path, dpi=150, bbox_inches="tight")
+            fig.savefig(save_path, dpi=150, bbox_inches="tight", pad_inches=0.12)
             plt.close()
 
             curve_path = os.path.join(self.save_dir, "03_Allan曲线数据.csv")

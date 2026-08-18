@@ -157,7 +157,15 @@ def _write_device_csv(module_name: str, path: Path, rows: int = 1200, fs: float 
         acc_scale = 1.0 / 9.80665
         magnetic = module_name.endswith("LINS355")
         with path.open("w", encoding="utf-8", newline="") as stream:
-            stream.write("device\nrecorded_at\n\ncolumns\nunits\n")
+            names = (["Ax", "Ay", "Az", "Gx", "Gy", "Gz", "Mx", "My", "Mz",
+                      "Roll", "Pitch", "Yaw", "TempX"] if magnetic else
+                     ["Ax", "Ay", "Az", "Gx", "Gy", "Gz", "Roll", "Pitch", "Yaw", "TempX"])
+            units = (["g", "g", "g", "dps", "dps", "dps", "gauss", "gauss", "gauss",
+                      "degrees", "degrees", "degrees", "deg_C"] if magnetic else
+                     ["g", "g", "g", "dps", "dps", "dps", "degrees", "degrees", "degrees", "deg_C"])
+            stream.write("device\nrecorded_at\n\n")
+            stream.write("\t".join(names) + "\t\n")
+            stream.write("\t".join(units) + "\t\n")
             for idx in range(rows):
                 values = [
                     signals["ax"][idx] * acc_scale,

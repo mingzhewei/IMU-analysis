@@ -19,6 +19,8 @@ import pytest
 MODULE_NAMES = (
     "IMU_Analysis_huayi",
     "IMU_Analysis_yuanshen",
+    "IMU_Analysis_linsi_LINS16460",
+    "IMU_Analysis_linsi_LINS355",
 )
 
 
@@ -38,9 +40,43 @@ def _write_device_csv(module_name: str, path: Path, rows: int = 1200,
     frame = pd.DataFrame(signals)
     if module_name.endswith("huayi"):
         frame.insert(0, "frameCount", np.arange(1, rows + 1))
-    else:
+    elif module_name.endswith("yuanshen"):
         frame.insert(0, "TID", np.arange(1, rows + 1))
-    frame.to_csv(path, index=False, encoding="utf-8-sig")
+    elif module_name.endswith("LINS16460"):
+        # 生产解析器严格接收10列，源设备加速度单位为g。
+        frame = pd.DataFrame({
+            "时间": np.arange(rows),
+            "加速度X(g)": signals["acc_x"] / 9.80665,
+            "加速度Y(g)": signals["acc_y"] / 9.80665,
+            "加速度Z(g)": signals["acc_z"] / 9.80665,
+            "陀螺X(°/s)": signals["gyro_x"],
+            "陀螺Y(°/s)": signals["gyro_y"],
+            "陀螺Z(°/s)": signals["gyro_z"],
+            "横滚角(°)": np.zeros(rows),
+            "俯仰角(°)": np.zeros(rows),
+            "航向角(°)": np.zeros(rows),
+        })
+    else:
+        # LINS355真实采集格式：5行采集头 + 13列数据 + 行尾空列。
+        names = ["Ax", "Ay", "Az", "Gx", "Gy", "Gz", "Mx", "My", "Mz",
+                 "Roll", "Pitch", "Yaw", "TempX"]
+        units = ["g", "g", "g", "dps", "dps", "dps", "gauss", "gauss", "gauss",
+                 "degrees", "degrees", "degrees", "deg_C"]
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            stream.write("device\nrecorded_at\n\n")
+            stream.write("\t".join(names) + "\t\n")
+            stream.write("\t".join(units) + "\t\n")
+            for idx in range(rows):
+                values = [signals["acc_x"][idx] / 9.80665,
+                          signals["acc_y"][idx] / 9.80665,
+                          signals["acc_z"][idx] / 9.80665,
+                          signals["gyro_x"][idx], signals["gyro_y"][idx],
+                          signals["gyro_z"][idx], 0.0, 0.0, 0.0,
+                          0.0, 0.0, 0.0, 25.0]
+                stream.write("\t".join(f"{value:.12g}" for value in values) + "\t\n")
+        return
+    sep = "\t" if "LINS" in module_name else ","
+    frame.to_csv(path, index=False, encoding="utf-8-sig", sep=sep)
 
 
 def _capture_allan_figure(module_name: str, tmp_path: Path,
