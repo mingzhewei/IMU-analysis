@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<title>磁力计分析报告 - 2026520</title>
+<style>
+body{font-family:'Microsoft YaHei',Arial,sans-serif;max-width:1200px;margin:0 auto;padding:20px;background:#f5f5f5}
+.header{background:linear-gradient(135deg,#9467bd,#5254a3);color:white;padding:25px;border-radius:10px;margin-bottom:25px}
+.section{background:white;padding:20px;margin-bottom:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1)}
+h2{color:#9467bd;border-bottom:3px solid #9467bd;padding-bottom:8px}
+table{width:100%;border-collapse:collapse;margin:12px 0}
+th{background:#9467bd;color:white;padding:10px;text-align:center}
+td{padding:10px;text-align:center;border:1px solid #ddd}
+tr:nth-child(even){background:#f8f9fa}
+</style></head><body>
+<div class="header">
+  <h1>🧲 磁力计分析报告</h1>
+  <p><b>文件:</b> 2026520 &nbsp;|&nbsp; <b>采样率:</b> 200.0 Hz（外部配置，文件无法自证） &nbsp;|&nbsp;
+     <b>生成时间:</b> 2026-08-18 16:45:33</p>
+</div>
+<div class="section">
+  <h2>1. 磁场强度</h2>
+  <p>模长均值: <b>0.6003 gauss</b> &nbsp;
+     σ: <b>0.007743 gauss</b> &nbsp;
+     稳定性: <b>1.290%</b> — 仅作描述统计（未设置经确认的合格阈值）</p>
+  <p>机体系磁场方位角: <b>-90.763°</b> (σ=0.8544°) &nbsp;
+     机体系磁场倾角: <b>62.661°</b> (σ=0.2923°)<br>
+     <span style="color:#888">注：为机体坐标系中的磁场方向角，非导航系地磁偏角/磁倾角</span></p>
+</div>
+<div class="section">
+  <h2>2. 基础统计</h2>
+  <table><thead><tr><th>轴</th><th>均值(gauss)</th><th>标准差</th><th>RMS</th><th>偏度</th><th>峰度</th></tr></thead>
+  <tbody><tr><td><b>Mx</b></td><td>-0.003682</td><td>0.004122</td><td>0.005527</td><td>-0.0555</td><td>-0.0003</td></tr>
+<tr><td><b>My</b></td><td>-0.275605</td><td>0.002074</td><td>0.275613</td><td>0.6127</td><td>1.0465</td></tr>
+<tr><td><b>Mz</b></td><td>0.533262</td><td>0.008057</td><td>0.533323</td><td>-0.3428</td><td>0.1101</td></tr>
+</tbody></table>
+</div>
+<div class="section">
+  <h2>3. Allan 偏差参数</h2>
+  <p>估计器: <b>ADEV（经典非重叠）</b>；输入为全量原始磁力计序列；未线性去趋势、未插值。<br>
+     显示网格: nominal_15_points_per_decade_plus_octave_anchors；参数提取网格: octave。<br>
+     RW单位为 gauss·√s；BI仅由连续近零斜率平台按 B=σ平台/0.66428 提取。门槛为本项目工程判据，不是标准合规声明。</p>
+  <table><thead><tr><th>轴</th><th>随机游走 RW</th><th>正式 BI</th><th>最低ADEV等效参考（非BI）</th><th>RRW / Q</th></tr></thead>
+  <tbody><tr><td><b>Mx</b></td><td>N/A<br><small>斜率=0.536；拟合斜率 0.536 偏离 -0.5，未作为有效 RW</small></td><td>2.9897 mG<br><small>连续平台拟合（log斜率=0.006，max|相邻斜率|=0.056，残差=0.00706）；平台门槛是本项目工程判据，非标准强制值</small></td><td>1.9288 mG<br><small>受约束最低ADEV（tau>=1 s，n_terms>=20）；仅作等效参考，不是平台BI；最低点位于候选范围边界</small></td><td>N/A<br><small>未建立经验证的磁力计RRW/Q提取口径</small></td></tr>
+<tr><td><b>My</b></td><td>N/A<br><small>斜率=0.555；拟合斜率 0.555 偏离 -0.5，未作为有效 RW</small></td><td>N/A<br><small>未找到同时满足的连续平台：|3点拟合斜率|<=0.10、max|相邻斜率|<=0.15、log10残差RMS<=0.03（本项目工程判据）</small></td><td>0.9600 mG<br><small>受约束最低ADEV（tau>=1 s，n_terms>=20）；仅作等效参考，不是平台BI；最低点位于候选范围边界</small></td><td>N/A<br><small>未建立经验证的磁力计RRW/Q提取口径</small></td></tr>
+<tr><td><b>Mz</b></td><td>N/A<br><small>斜率=0.386；拟合斜率 0.386 偏离 -0.5，未作为有效 RW</small></td><td>N/A<br><small>未找到同时满足的连续平台：|3点拟合斜率|<=0.10、max|相邻斜率|<=0.15、log10残差RMS<=0.03（本项目工程判据）</small></td><td>2.4676 mG<br><small>受约束最低ADEV（tau>=1 s，n_terms>=20）；仅作等效参考，不是平台BI；最低点位于候选范围边界</small></td><td>N/A<br><small>未建立经验证的磁力计RRW/Q提取口径</small></td></tr>
+</tbody></table>
+</div>
+<div class="section">
+  <h2>4. 航向分析</h2>
+  
+        <h3>航向一致性</h3>
+        <p>磁航向与Yaw相对偏差（磁航向-Yaw均值）: <b>29.47°</b>
+           <span style="color:#888">（器件Yaw为陀螺相对航向时不代表当地磁偏角）</span></p>
+        <p>差值标准差: <b>0.3628°</b>
+           （仅作描述统计，未设置经确认的合格阈值）</p>
+
+</div>
+<div class="section">
+  <h2>5. 分析图表</h2>
+  
+        <div style="margin:20px 0;text-align:center">
+            <img src="mag_1_时间序列.png" style="max-width:100%;border:1px solid #ddd;border-radius:6px">
+            <div style="background:#f8f9fa;padding:10px;margin-top:8px;border-left:4px solid #9467bd;text-align:left">
+                <b>磁力计时间序列</b><br>展示 Mx/My/Mz 随时间的变化，静态测试下应保持稳定
+            </div>
+        </div>
+        <div style="margin:20px 0;text-align:center">
+            <img src="mag_2_统计分布.png" style="max-width:100%;border:1px solid #ddd;border-radius:6px">
+            <div style="background:#f8f9fa;padding:10px;margin-top:8px;border-left:4px solid #9467bd;text-align:left">
+                <b>磁力计统计分布</b><br>展示 Mx/My/Mz 数据的概率密度分布，用于观察数据分布形态
+            </div>
+        </div>
+        <div style="margin:20px 0;text-align:center">
+            <img src="mag_3_Allan偏差.png" style="max-width:100%;border:1px solid #ddd;border-radius:6px">
+            <div style="background:#f8f9fa;padding:10px;margin-top:8px;border-left:4px solid #9467bd;text-align:left">
+                <b>磁力计 Allan 偏差</b><br>全量原始磁力计序列的ADEV（经典非重叠）；RW需通过斜率工程判据，BI仅由连续近零斜率平台计算，最低ADEV另列为非BI参考；RRW/Q不报告未经验证的数值
+            </div>
+        </div>
+        <div style="margin:20px 0;text-align:center">
+            <img src="mag_4_PSD.png" style="max-width:100%;border:1px solid #ddd;border-radius:6px">
+            <div style="background:#f8f9fa;padding:10px;margin-top:8px;border-left:4px solid #9467bd;text-align:left">
+                <b>磁力计功率谱密度</b><br>磁场噪声频谱，橙色虚线为白噪声基底，标注噪声密度（mG/√Hz）
+            </div>
+        </div>
+        <div style="margin:20px 0;text-align:center">
+            <img src="mag_5_磁场强度.png" style="max-width:100%;border:1px solid #ddd;border-radius:6px">
+            <div style="background:#f8f9fa;padding:10px;margin-top:8px;border-left:4px solid #9467bd;text-align:left">
+                <b>磁场强度稳定性</b><br>|B|=√(Mx²+My²+Mz²) 时间序列，稳定性=1.290%；仅作描述统计，未设置经确认的合格阈值
+            </div>
+        </div>
+        <div style="margin:20px 0;text-align:center">
+            <img src="mag_6_方向稳定性.png" style="max-width:100%;border:1px solid #ddd;border-radius:6px">
+            <div style="background:#f8f9fa;padding:10px;margin-top:8px;border-left:4px solid #9467bd;text-align:left">
+                <b>磁场方向稳定性</b><br>机体系磁场方位角=atan2(My,Mx)，机体系磁场倾角=atan2(Mz,√(Mx²+My²))（机体坐标系中的磁场方向角，非导航系地磁偏角/磁倾角；静态时应保持稳定）
+            </div>
+        </div>
+        <div style="margin:20px 0;text-align:center">
+            <img src="mag_7_航向一致性.png" style="max-width:100%;border:1px solid #ddd;border-radius:6px">
+            <div style="background:#f8f9fa;padding:10px;margin-top:8px;border-left:4px solid #9467bd;text-align:left">
+                <b>航向角一致性验证</b><br>倾斜补偿磁航向 vs IMU Yaw，差值σ=0.3628°，差值均值为两者相对偏差（器件Yaw为陀螺相对航向时不代表当地磁偏角）
+            </div>
+        </div>
+        <div style="margin:20px 0;text-align:center">
+            <img src="mag_8_9轴相关性.png" style="max-width:100%;border:1px solid #ddd;border-radius:6px">
+            <div style="background:#f8f9fa;padding:10px;margin-top:8px;border-left:4px solid #9467bd;text-align:left">
+                <b>9轴相关性分析</b><br>展示去趋势后9轴线性相关系数；相关性不单独证明电磁或机械因果关系
+            </div>
+        </div>
+</div>
+<div style="text-align:center;padding:15px;color:#666">
+  © IMU 磁力计分析模块 | 独立于6轴分析输出
+</div>
+</body></html>
