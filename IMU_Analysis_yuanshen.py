@@ -567,7 +567,7 @@ class IMUDataAnalyzer:
             plt.rcParams["axes.unicode_minus"] = False
 
             if "acc_z" in self.df.columns:
-                self.df["acc_z_corrected"] = self.df["acc_z"] - 9.80665
+                self.df["acc_z_corrected"] = self.df["acc_z"] - self.df["acc_z"].mean()  # 自适应去重力：减去Z轴实测均值（重力+零偏），兼容Z轴朝上/朝下安装
 
             if "time" not in self.df.columns:
                 self.df["time"] = np.arange(len(self.df)) / self.sample_rate
@@ -638,8 +638,8 @@ class IMUDataAnalyzer:
             plt.rcParams["axes.unicode_minus"] = False
             
             if "acc_z" in self.df.columns:
-                self.df["acc_z_corrected"] = self.df["acc_z"] - 9.80665
-            
+                self.df["acc_z_corrected"] = self.df["acc_z"] - self.df["acc_z"].mean()  # 自适应去重力：减去Z轴实测均值（重力+零偏），兼容Z轴朝上/朝下安装
+
             fig, axes = plt.subplots(2, 3, figsize=(15, 10))
             axes_flat = axes.flatten()
             

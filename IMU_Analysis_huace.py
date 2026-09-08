@@ -1,7 +1,8 @@
 # 整合的IMU分析工具箱（huace AHRS 二进制协议支持版）
 # 分析方法严格继承自 IMU_Analysis_yuanshen.py 参考代码
 # 协议字段定义依据 huace_data/AHRS.json (schema_version 4)
-import os, sys, re, struct, datetime, textwrap
+# 与《IMU通信协议方案.docx》1.3 节核对一致
+import os, sys, re, struct, datetime, textwrap, zlib
 
 # ---- stdout/stderr UTF-8 强制编码（修复 Windows PowerShell GBK 编码报错）----
 # PowerShell 默认 stdout 编码为 GBK/cp936，当 print() 输出含 '²°σμ√' 等特殊字符
@@ -173,11 +174,25 @@ _FMT_SENSOR = struct.Struct('<3f')
 _FMT_F = struct.Struct('<f')
 
 
+def _frame_crc32_ok(buf: bytes) -> bool:
+    """CRC32 校验。
+
+    依据：协议文档 1.3 节帧格式 `A5 D5 | id:u16 | length:u16 | payload | crc32:u32`；
+    文档未定义 CRC 参数，算法由实测确定（2026-09-08，对 1,790,738 帧全量
+    匹配率 100%）：zlib CRC-32 (ISO-HDLC) 覆盖 frame[2:50]（id+length+payload，
+    不含帧头 A5 D5 与 crc 字段自身），小端存储于帧尾 4 字节。
+    """
+    if len(buf) < FRAME_SIZE:
+        return False
+    crc_file, = _FMT_I.unpack_from(buf, FRAME_CRC_OFFSET)
+    return (zlib.crc32(buf[2:FRAME_CRC_OFFSET]) & 0xFFFFFFFF) == crc_file
+
+
 def _parse_one_frame(buf: bytes, verify_checksum: bool = True) -> dict | None:
     """解析单帧 huace AHRS 54字节数据
 
-    verify_checksum 参数保留以兼容调用方签名；本协议 crc 算法未定义
-    （AHRS.json checksum="none"），实际不做校验。
+    verify_checksum=True 时执行 CRC32 校验（算法见 _frame_crc32_ok），
+    校验失败返回 None（由调用方计入 CRC 拒绝统计）。
     """
     if len(buf) < FRAME_SIZE:
         return None
@@ -193,6 +208,9 @@ def _parse_one_frame(buf: bytes, verify_checksum: bool = True) -> dict | None:
         gyro_raw = _FMT_SENSOR.unpack_from(buf, FRAME_GYRO_OFFSET)
         temp_raw = _FMT_F.unpack_from(buf, FRAME_TEMP_OFFSET)[0]
     except Exception:
+        return None
+
+    if verify_checksum and not _frame_crc32_ok(buf):
         return None
 
     return {
@@ -227,6 +245,7 @@ def parse_binary_file(filepath: str, max_frames: int = 0,
     valid_count = 0
     bad_sync_count = 0
     rejected_count = 0
+    crc_rejected_count = 0
     offset = 0
     for i in range(n_frames_total):
         buf = raw[offset:offset + FRAME_SIZE]
@@ -242,6 +261,9 @@ def parse_binary_file(filepath: str, max_frames: int = 0,
             rows.append(frame)
         else:
             rejected_count += 1
+            # 区分拒绝原因：CRC 校验失败 vs 字段解包失败
+            if verify_checksum and not _frame_crc32_ok(buf):
+                crc_rejected_count += 1
         offset += FRAME_SIZE
 
     if not rows:
@@ -251,8 +273,9 @@ def parse_binary_file(filepath: str, max_frames: int = 0,
             "binary_valid_frames": 0,
             "binary_bad_sync_frames": bad_sync_count,
             "binary_rejected_frames": rejected_count,
+            "binary_crc_rejected_frames": crc_rejected_count,
             "binary_trailing_bytes": file_size % FRAME_SIZE,
-            "binary_checksum_verified": False,
+            "binary_checksum_verified": bool(verify_checksum),
         })
         return empty
 
@@ -268,8 +291,9 @@ def parse_binary_file(filepath: str, max_frames: int = 0,
         "binary_valid_frames": valid_count,
         "binary_bad_sync_frames": bad_sync_count,
         "binary_rejected_frames": rejected_count,
+        "binary_crc_rejected_frames": crc_rejected_count,
         "binary_trailing_bytes": file_size % FRAME_SIZE,
-        "binary_checksum_verified": False,
+        "binary_checksum_verified": bool(verify_checksum),
         "binary_msg_id_values": sorted(df["msg_id"].astype(int).unique().tolist()),
         "binary_data_len_values": sorted(df["data_len"].astype(int).unique().tolist()),
     })
@@ -412,6 +436,10 @@ def calculate_timestamp_gap_statistics(ts_values, sample_rate: float,
         "inferred_rate_hz": float("nan"),
         "min_step_ms": float("nan"),
         "max_step_ms": float("nan"),
+        # 丢帧明细：每个缺口一条记录（最多返回 max_gap_details 条）：
+        # {frame_index, ts_before_ms, ts_after_ms, step_ms, missing_frames, missing_duration_s}
+        "gap_details": [],
+        "gap_details_truncated": False,
     }
 
     if ts_values is None:
@@ -460,6 +488,28 @@ def calculate_timestamp_gap_statistics(ts_values, sample_rate: float,
     missing_frames = int(np.sum(np.floor(step[gap_mask] / dt) - 1)) if np.any(gap_mask) else 0
     gap_events = int(np.count_nonzero(gap_mask))
     duplicate_pairs = int(np.count_nonzero(step == 0))
+
+    # 丢帧位置明细（frame_index 为缺口前一帧在当前序列中的行号，
+    # 即第 frame_index 帧与第 frame_index+1 帧之间出现缺口）
+    max_gap_details = 500
+    gap_details = []
+    if np.any(gap_mask):
+        pair_positions = np.nonzero(pair_valid)[0]  # 压缩索引 -> 原始帧行号
+        gap_positions = pair_positions[gap_mask]
+        gap_steps = step[gap_mask]
+        fs = float(sample_rate) if sample_rate and sample_rate > 0 else 1.0
+        for pos, gstep in zip(gap_positions[:max_gap_details], gap_steps[:max_gap_details]):
+            g_missing = int(np.floor(gstep / dt) - 1)
+            gap_details.append({
+                "frame_index": int(pos),
+                "ts_before_ms": int(vals[pos]),
+                "ts_after_ms": int(vals[pos + 1]),
+                "step_ms": int(gstep),
+                "missing_frames": g_missing,
+                "missing_duration_s": g_missing / fs,
+            })
+    result["gap_details"] = gap_details
+    result["gap_details_truncated"] = bool(gap_events > max_gap_details)
 
     result.update({
         "available": True,
@@ -612,13 +662,15 @@ class IMUDataAnalyzer:
             rejected = self.binary_quality.get("binary_rejected_frames", 0)
             bad_sync = self.binary_quality.get("binary_bad_sync_frames", 0)
             trailing = self.binary_quality.get("binary_trailing_bytes", 0)
+            crc_rejected = self.binary_quality.get("binary_crc_rejected_frames", 0)
             checksum_state = (
-                "未启用（协议未定义校验算法，仅校验同步头）"
-                if not self.binary_quality.get("binary_checksum_verified") else "已启用"
+                "已启用（CRC32，算法经全量数据实测验证）"
+                if self.binary_quality.get("binary_checksum_verified")
+                else "未启用"
             )
             self.report_data["BIN帧质量"] = (
-                f"固定槽位 {total_slots}，校验拒绝 {rejected}，同步头异常 {bad_sync}，"
-                f"尾部余字节 {trailing}，校验验证{checksum_state}"
+                f"固定槽位 {total_slots}，校验拒绝 {rejected}（其中 CRC32 拒绝 {crc_rejected}），"
+                f"同步头异常 {bad_sync}，尾部余字节 {trailing}，校验验证{checksum_state}"
             )
             msg_ids = self.binary_quality.get("binary_msg_id_values")
             data_lens = self.binary_quality.get("binary_data_len_values")
@@ -695,11 +747,11 @@ class IMUDataAnalyzer:
         return stats
 
     def _load_binary_data(self):
-        """加载 huace AHRS 二进制文件"""
-        self.df = parse_binary_file(self.file_path, verify_checksum=False)
+        """加载 huace AHRS 二进制文件（启用 CRC32 校验）"""
+        self.df = parse_binary_file(self.file_path, verify_checksum=True)
         if self.df.empty:
             raise ValueError("二进制文件解析结果为空，请检查文件是否完整"
-                             "（huace AHRS 协议，54字节/帧，同步字 A5 D5）")
+                             "（huace AHRS 协议，54字节/帧，同步字 A5 D5，CRC32 已启用校验）")
         self.binary_quality = dict(self.df.attrs)
         self.source_frame_gap_stats = calculate_timestamp_gap_statistics(
             self.df["timestamp_ms"], self.sample_rate, TIMESTAMP_MODULUS
@@ -713,6 +765,13 @@ class IMUDataAnalyzer:
         if np.any(wraps):
             ts[1:] += np.cumsum(np.where(wraps, TIMESTAMP_MODULUS, 0))
         self.df["time"] = (ts - ts[0]) / 1000.0
+
+        # 数据完整性检测的源级数据（基于原始全量文件，不受掐头去尾影响）
+        self._integrity_source = {
+            "ts_unwrapped": ts.copy(),              # 回绕展开后的时间戳 (ms)
+            "quality": dict(self.binary_quality),   # 帧质量（含 CRC 拒绝计数）
+            "stats": dict(self.source_frame_gap_stats),  # 时间戳缺帧统计（含明细）
+        }
 
     def _load_csv_data(self):
         """加载 CSV 数据 - 增强鲁棒性（参考原版）
@@ -2717,6 +2776,247 @@ class IMUDataAnalyzer:
             "method": method,
         }
 
+    # ----------------------------------------------------------------
+    # 数据完整性检测图（仅 huace 二进制数据；CSV 不适用）
+    # ----------------------------------------------------------------
+    def plot_data_integrity(self):
+        """绘制数据完整性检测图并生成结论。
+
+        审计口径（均基于原始全量文件，不受掐头去尾影响）：
+        1. CRC32 校验：zlib CRC-32 覆盖 frame[2:50]（算法经全量实测验证），
+           校验失败的帧计入坏帧，不进入分析；
+        2. 坏帧：同步头异常帧 + CRC32 拒绝帧 + 其他解包失败帧 + 尾部不完整字节；
+        3. 丢帧：相邻设备时间戳步长 > 1.5×中位步长记为一处缺口，
+           推定缺失 floor(step/dt)-1 帧（±1 帧取整不确定性）；
+        4. 采样率符合性：时间戳推定频率与用户配置频率的相对偏差，
+           ≤0.1% 判"符合"（本项目工程判据，非协议规定）。
+        """
+        try:
+            plt.close("all")
+            plt.rcParams["font.family"] = "sans-serif"
+            plt.rcParams["font.sans-serif"] = list(_CN_FALLBACK_NAMES) + ["DejaVu Sans"]
+            plt.rcParams["axes.unicode_minus"] = False
+
+            src = getattr(self, "_integrity_source", None)
+            if not src or "ts_unwrapped" not in src:
+                self.report_data["数据完整性图"] = (
+                    "仅 huace 二进制数据支持完整性检测（CSV 数据不适用）"
+                )
+                return None
+
+            ts = np.asarray(src["ts_unwrapped"], dtype=np.float64)
+            quality = src.get("quality", {})
+            stats = src.get("stats", {})
+
+            total_slots = int(quality.get("binary_total_slots", 0))
+            valid_frames = int(quality.get("binary_valid_frames", 0))
+            bad_sync = int(quality.get("binary_bad_sync_frames", 0))
+            crc_rejected = int(quality.get("binary_crc_rejected_frames", 0))
+            rejected = int(quality.get("binary_rejected_frames", 0))
+            trailing = int(quality.get("binary_trailing_bytes", 0))
+
+            steps = np.diff(ts)
+            t_rel = (ts - ts[0]) / 1000.0  # 秒
+            dt = float(stats.get("median_step_ms", np.median(steps)))
+            inferred_hz = float(stats.get("inferred_rate_hz", 1000.0 / dt if dt else float("nan")))
+            gap_events = int(stats.get("gap_events", 0))
+            missing_frames = int(stats.get("missing_frames", 0))
+            gap_details = stats.get("gap_details", [])
+            gap_truncated = bool(stats.get("gap_details_truncated", False))
+            duplicate_pairs = int(stats.get("duplicate_pairs", 0))
+
+            # 采样率符合性（工程判据：相对偏差 ≤ 0.1% 判为符合）
+            if np.isfinite(inferred_hz) and self.sample_rate > 0:
+                rel_dev_pct = abs(inferred_hz - self.sample_rate) / self.sample_rate * 100.0
+                rate_conform = rel_dev_pct <= 0.1
+            else:
+                rel_dev_pct = float("nan")
+                rate_conform = False
+
+            # 异常步进掩码（丢帧或重复）
+            anomaly_mask = (steps > dt * 1.5) | (steps < dt * 0.5)
+
+            fig, axes = plt.subplots(2, 2, figsize=(16, 11))
+            fig.suptitle("数据完整性检测（基于原始全量文件）", fontsize=16, fontweight="bold")
+
+            # ── (0,0) 时间戳步长曲线 ──
+            ax = axes[0, 0]
+            stride = max(1, len(steps) // 200000)  # 抽样绘制正常步长
+            ax.plot(t_rel[1:][::stride], steps[::stride], color="#1f77b4",
+                    linewidth=0.6, alpha=0.8, label=f"帧间时间戳步长（{stride}点抽样）")
+            if np.any(anomaly_mask):
+                ax.plot(t_rel[1:][anomaly_mask], steps[anomaly_mask], "r.",
+                        markersize=4, alpha=0.7, label=f"异常步进（{int(np.count_nonzero(anomaly_mask))} 处）")
+            ax.axhline(dt, color="#2ca02c", linestyle="--", linewidth=1.2,
+                       label=f"基准步长 {dt:.3f} ms")
+            ax.set_xlabel("时间 (s)")
+            ax.set_ylabel("步长 (ms)")
+            ax.set_title("帧间时间戳步长", fontweight="bold")
+            ax.legend(fontsize=8, loc="best")
+            ax.grid(True, alpha=0.3)
+
+            # ── (0,1) 步长分布直方图 ──
+            ax = axes[0, 1]
+            step_range = (max(dt - 1.0, 0), dt + 1.0) if np.all(~anomaly_mask) else (0, float(np.max(steps)))
+            ax.hist(steps, bins=80, range=step_range, color="#1f77b4",
+                    edgecolor="black", linewidth=0.3)
+            ax.axvline(dt, color="#2ca02c", linestyle="--", linewidth=1.2,
+                       label=f"中位步长 {dt:.3f} ms")
+            ax.set_yscale("log")
+            ax.set_xlabel("步长 (ms)")
+            ax.set_ylabel("帧数（对数）")
+            ax.set_title("时间戳步长分布", fontweight="bold")
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+
+            # ── (1,0) 累计接收帧数 vs 设备时间 ──
+            ax = axes[1, 0]
+            cum = np.arange(1, len(ts) + 1)
+            stride2 = max(1, len(ts) // 300000)
+            ax.plot(t_rel[::stride2], cum[::stride2], color="#1f77b4",
+                    linewidth=1.0, label="累计接收帧数")
+            if dt > 0:
+                ax.plot(t_rel[::stride2], t_rel[::stride2] * 1000.0 / dt, color="#2ca02c",
+                        linestyle="--", linewidth=1.0,
+                        label=f"理想连续线（{1000.0/dt:.2f} Hz）")
+            if gap_details:
+                gap_t = [(g["ts_before_ms"] - ts[0]) / 1000.0 for g in gap_details[:200]]
+                ax.vlines(gap_t, 0, len(ts), colors="red", linestyles=":",
+                          linewidth=0.8, alpha=0.8,
+                          label=f"丢帧位置（前 {min(len(gap_details), 200)} 处）")
+            ax.set_xlabel("设备时间 (s)")
+            ax.set_ylabel("累计帧数")
+            ax.set_title("累计帧数增长与丢帧位置", fontweight="bold")
+            ax.legend(fontsize=8, loc="best")
+            ax.grid(True, alpha=0.3)
+
+            # ── (1,1) 结论摘要面板 ──
+            ax = axes[1, 1]
+            ax.axis("off")
+            bad_total = bad_sync + crc_rejected + max(rejected - crc_rejected, 0)
+            if bad_total == 0 and gap_events == 0 and rate_conform:
+                verdict, verdict_color = "√ 数据完整：无坏帧、无丢帧、采样率符合", "#2ca02c"
+            elif bad_total == 0 and gap_events == 0 and not rate_conform:
+                verdict, verdict_color = "! 无坏帧、无丢帧；采样率与配置偏差超阈值，请核对", "#e67e22"
+            else:
+                verdict, verdict_color = "! 检测到数据完整性问题，详见下列统计", "#e53e3e"
+
+            if np.isfinite(rel_dev_pct):
+                rate_line = (f"采样率：配置 {self.sample_rate:g} Hz；时间戳推定 {inferred_hz:.2f} Hz；"
+                             f"相对偏差 {rel_dev_pct:.3f}% → {'符合' if rate_conform else '不符合'}"
+                             f"（判据：偏差≤0.1%，本项目工程判据）")
+            else:
+                rate_line = "采样率：无法由时间戳推定"
+
+            if gap_events == 0:
+                gap_line = f"丢帧：未检测到丢帧（{int(np.count_nonzero(anomaly_mask))} 处异常步进）" \
+                           if np.any(anomaly_mask) else "丢帧：未检测到丢帧（时间戳步长全程均匀）"
+            else:
+                ratio = stats.get("missing_ratio", float("nan"))
+                ratio_txt = f"，占推定完整时长 {ratio*100:.4f}%" if np.isfinite(ratio) else ""
+                gap_line = f"丢帧：检测到 {gap_events} 处缺口，推定丢失 {missing_frames} 帧{ratio_txt}"
+                if crc_rejected > 0:
+                    gap_line += f"（口径说明：其中包含 CRC32 拒绝的 {crc_rejected} 帧在数据流中留下的空洞，与坏帧统计不叠加计数）"
+
+            lines = [
+                ("数据完整性检测结果", "title"),
+                (f"数据文件: {os.path.basename(self.file_path)}", "info"),
+                ("CRC32 校验: 已启用（zlib CRC-32，覆盖 id+length+payload，算法经实测验证）", "info"),
+                (f"总帧数（文件槽位）: {total_slots:,}；尾部不完整字节: {trailing}", "info"),
+                (f"有效解析帧: {valid_frames:,}", "info"),
+                (f"坏帧: 同步头异常 {bad_sync} / CRC32 拒绝 {crc_rejected} / 其他 {max(rejected - crc_rejected, 0)}",
+                 "warn" if bad_total else "info"),
+                (gap_line, "warn" if gap_events else "info"),
+                (f"重复帧（时间戳相同）: {duplicate_pairs} 对", "info"),
+                (f"采样间隔: 中位 {dt:.3f} ms（最小 {float(np.min(steps)):.3f} / 最大 {float(np.max(steps)):.3f}）", "info"),
+                (rate_line, "info" if rate_conform else "warn"),
+                ("", "info"),
+                (verdict, "verdict"),
+            ]
+            y = 0.98
+            for text, style in lines:
+                if style == "title":
+                    ax.text(0.02, y, text, fontsize=13, fontweight="bold",
+                            color="#2d3748", transform=ax.transAxes, va="top")
+                    y -= 0.075
+                elif style == "verdict":
+                    ax.text(0.02, y, text, fontsize=12.5, fontweight="bold",
+                            color=verdict_color, transform=ax.transAxes, va="top")
+                    y -= 0.06
+                else:
+                    color = "#e53e3e" if style == "warn" else "#4a5568"
+                    ax.text(0.02, y, text, fontsize=10, color=color,
+                            transform=ax.transAxes, va="top")
+                    y -= 0.055
+
+            # 丢帧明细（若有，最多列 30 条）
+            if gap_details:
+                y -= 0.01
+                ax.text(0.02, y, "丢帧明细（帧号/时间戳区间/缺失数）：", fontsize=9.5,
+                        fontweight="bold", color="#e53e3e", transform=ax.transAxes, va="top")
+                y -= 0.045
+                for g in gap_details[:30]:
+                    txt = (f"第 {g['frame_index']:,} 帧后: timer {g['ts_before_ms']:,} → "
+                           f"{g['ts_after_ms']:,} ms，步长 {g['step_ms']} ms，"
+                           f"推定缺失 {g['missing_frames']} 帧（{g['missing_duration_s']:.3f} s）")
+                    ax.text(0.04, y, txt, fontsize=8.2, color="#4a5568",
+                            transform=ax.transAxes, va="top", family="sans-serif")
+                    y -= 0.035
+                shown = min(len(gap_details), 30)
+                remaining = gap_events - shown
+                note = f"（以上为前 {shown} 条"
+                if gap_truncated or remaining > 0:
+                    note += f"；共 {gap_events} 处，完整明细见报告文字"
+                note += "）"
+                ax.text(0.04, y, note, fontsize=8.2, color="#718096",
+                        transform=ax.transAxes, va="top")
+                ax.text(0.02, 0.01,
+                        "推定缺失帧数 = floor(步长/基准步长) - 1，存在 ±1 帧取整不确定性",
+                        fontsize=7.5, color="#a0aec0", transform=ax.transAxes, va="bottom")
+
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            save_path = os.path.join(self.save_dir, "08_数据完整性检测图.png")
+            plt.savefig(save_path, dpi=150, bbox_inches="tight")
+            plt.close("all")
+            self.report_data["数据完整性图"] = save_path
+
+            # ── 写入报告文字结论（自动出现在 HTML/MD 基本信息）──
+            self.report_data["完整性检测总帧数"] = (
+                f"{total_slots:,} 槽位 / 有效 {valid_frames:,} 帧 / 尾部余 {trailing} 字节"
+            )
+            self.report_data["坏帧统计"] = (
+                f"同步头异常 {bad_sync}，CRC32 拒绝 {crc_rejected}，"
+                f"其他解包失败 {max(rejected - crc_rejected, 0)}"
+            )
+            self.report_data["丢帧统计"] = gap_line
+            if np.isfinite(rel_dev_pct):
+                self.report_data["采样间隔统计"] = (
+                    f"中位 {dt:.3f} ms（最小 {float(np.min(steps)):.3f} / 最大 {float(np.max(steps)):.3f}），"
+                    f"对应 {1000.0/dt:.2f} Hz"
+                )
+                self.report_data["采样率符合性"] = (
+                    f"配置 {self.sample_rate:g} Hz vs 推定 {inferred_hz:.2f} Hz，"
+                    f"偏差 {rel_dev_pct:.3f}%，{'符合' if rate_conform else '不符合'}"
+                    "（判据 ≤0.1%，工程判据）"
+                )
+            if gap_details:
+                detail_lines = [
+                    f"第 {g['frame_index']:,} 帧后 timer {g['ts_before_ms']:,}→{g['ts_after_ms']:,} ms，"
+                    f"推定缺失 {g['missing_frames']} 帧（{g['missing_duration_s']:.3f} s）"
+                    for g in gap_details[:50]
+                ]
+                suffix = f"（共 {gap_events} 处，仅列前 {min(len(gap_details), 50)} 条）" \
+                    if gap_events > 50 else ""
+                self.report_data["丢帧明细"] = "；".join(detail_lines) + suffix
+            self.report_data["数据完整性结论"] = verdict
+            return save_path
+        except Exception as e:
+            print(f"数据完整性检测图生成失败: {e}")
+            import traceback as _tb
+            _tb.print_exc()
+            self.report_data["数据完整性图"] = f"生成失败: {e}"
+            return None
+
     def generate_html_report(self):
         """生成HTML报告"""
         try:
@@ -2841,6 +3141,7 @@ class IMUDataAnalyzer:
                 "Allan曲线数据", "Allan参数汇总",
                 "Allan结果", "时间序列图", "统计分布图", "Allan方差图", "Allan偏差图",
                 "PSD图", "相关性图", "漂移分析图", "落点半径对比图", "落点半径对比数据",
+                "数据完整性图",
             }
             for key, value in self.report_data.items():
                 if key not in hidden_report_keys:
@@ -2919,8 +3220,9 @@ class IMUDataAnalyzer:
                 ("Allan方差图", "3. Allan偏差与零偏分析图"),
                 ("PSD图", "4. 功率谱密度（PSD）分析图"),
                 ("相关性图", "5. 相关性分析图"),
-                ("漂移分析图", "6. 长期零漂趋势图"),
-                ("落点半径对比图", "7. 不同时间窗口1σ落点半径对比图")
+                ("数据完整性图", "6. 数据完整性检测图"),
+                ("漂移分析图", "7. 长期零漂趋势图"),
+                ("落点半径对比图", "8. 不同时间窗口1σ落点半径对比图")
             ]
 
             for key, title in image_keys:
@@ -3008,6 +3310,7 @@ class IMUDataAnalyzer:
                 "Allan曲线数据", "Allan参数汇总",
                 "Allan结果", "时间序列图", "统计分布图", "Allan方差图", "Allan偏差图",
                 "PSD图", "相关性图", "漂移分析图", "落点半径对比图", "落点半径对比数据",
+                "数据完整性图",
             }
             for key, value in self.report_data.items():
                 if key not in hidden_report_keys:
@@ -3077,8 +3380,9 @@ class IMUDataAnalyzer:
                 ("Allan方差图", "3. Allan偏差与零偏分析图"),
                 ("PSD图", "4. 功率谱密度（PSD）分析图"),
                 ("相关性图", "5. 相关性分析图"),
-                ("漂移分析图", "6. 长期零漂趋势图"),
-                ("落点半径对比图", "7. 不同时间窗口1σ落点半径对比图")
+                ("数据完整性图", "6. 数据完整性检测图"),
+                ("漂移分析图", "7. 长期零漂趋势图"),
+                ("落点半径对比图", "8. 不同时间窗口1σ落点半径对比图")
             ]
 
             for key, title in image_keys:
@@ -3145,6 +3449,7 @@ class IMUDataAnalyzer:
             ("绘制Allan偏差图", self.plot_allan_variance),
             ("绘制PSD图", self.plot_psd),
             ("绘制相关性分析图", self.plot_correlation),
+            ("绘制数据完整性检测图", self.plot_data_integrity),
             ("绘制漂移分析图", self.plot_drift),
             ("绘制落点半径对比图", self.plot_drift_radius_comparison),
             ("生成HTML报告", self.generate_html_report),
@@ -3261,6 +3566,7 @@ class IMUAnalysisApp:
             "✓ 相关性分析（热图）",
             "✓ 长期零漂趋势分析",
             "✓ 不同时间窗口1σ落点半径对比",
+            "✓ 数据完整性检测（CRC32校验、坏帧/丢帧审计、采样间隔周期核查，仅bin数据）",
             "✓ 生成HTML和Markdown报告",
             "✓ 支持 huace AHRS 二进制格式 (.bin，54字节/帧，A5 D5 同步字)"
         ]

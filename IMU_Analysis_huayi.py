@@ -317,6 +317,10 @@ def calculate_frame_gap_statistics(frame_values, sample_rate: float,
         "transition_count": 0,
         "ratio_is_partial_estimate": False,
         "modulus": int(modulus),
+        # 丢帧明细：每个缺口一条记录（最多 max_gap_details 条）：
+        # {frame_index, count_before, count_after, step, missing_frames, missing_duration_s}
+        "gap_details": [],
+        "gap_details_truncated": False,
     }
 
     if frame_values is None:
@@ -357,6 +361,27 @@ def calculate_frame_gap_statistics(frame_values, sample_rate: float,
     duplicate_pairs = int(np.count_nonzero(trusted & (step == 0)))
     wrap_count = int(np.count_nonzero(trusted & (raw_delta < 0)))
     ambiguous_count = int(np.count_nonzero(ambiguous))
+
+    # 丢帧位置明细（frame_index 为缺口前一帧在当前序列中的行号）
+    max_gap_details = 500
+    gap_details = []
+    if np.any(gap_mask):
+        pair_positions = np.nonzero(pair_valid)[0]  # 压缩索引 -> 原始帧行号
+        gap_positions = pair_positions[gap_mask]
+        gap_steps = step[gap_mask]
+        fs = float(sample_rate) if sample_rate and sample_rate > 0 else 1.0
+        for pos, gstep in zip(gap_positions[:max_gap_details], gap_steps[:max_gap_details]):
+            g_missing = int(gstep - 1)
+            gap_details.append({
+                "frame_index": int(pos),
+                "count_before": int(vals[pos]),
+                "count_after": int(vals[pos + 1]),
+                "step": int(gstep),
+                "missing_frames": g_missing,
+                "missing_duration_s": g_missing / fs,
+            })
+    result["gap_details"] = gap_details
+    result["gap_details_truncated"] = bool(gap_events > max_gap_details)
 
     result.update({
         "available": True,
@@ -573,6 +598,15 @@ class IMUDataAnalyzer:
         # 创建时间列
         self.df["time"] = np.arange(len(self.df)) / self.sample_rate
 
+        # 数据完整性检测的源级数据（基于原始全量文件，不受掐头去尾影响）
+        if "frameCount" in self.df.columns:
+            self._integrity_source = {
+                "frame_counts": self.df["frameCount"].to_numpy(dtype=np.int64),
+                "quality": dict(self.binary_quality),
+                "stats": dict(self.source_frame_gap_stats),
+                "source": "binary",
+            }
+
     def _load_csv_data(self):
         """加载 CSV 数据 - 增强鲁棒性（参考原版）
         支持多种 CSV 格式：
@@ -627,6 +661,13 @@ class IMUDataAnalyzer:
             self.source_frame_gap_stats = calculate_frame_gap_statistics(
                 self.df["frameCount"], self.sample_rate, FRAME_COUNTER_MODULUS
             )
+            # 数据完整性检测的源级数据（基于原始全量文件，不受掐头去尾影响）
+            self._integrity_source = {
+                "frame_counts": self.df["frameCount"].to_numpy(dtype=np.int64),
+                "quality": None,  # CSV 为文本导出，无帧校验和概念
+                "stats": dict(self.source_frame_gap_stats),
+                "source": "csv",
+            }
 
         # ── 第零步：列名标准化映射 ──
         # 华依通信协议 dump 格式：ax/ay/az → acc_x/acc_y/acc_z
@@ -805,7 +846,7 @@ class IMUDataAnalyzer:
             plt.rcParams["axes.unicode_minus"] = False
 
             if "acc_z" in self.df.columns:
-                self.df["acc_z_corrected"] = self.df["acc_z"] - 9.80665
+                self.df["acc_z_corrected"] = self.df["acc_z"] - self.df["acc_z"].mean()  # 自适应去重力：减去Z轴实测均值（重力+零偏），兼容Z轴朝上/朝下安装
 
             if "time" not in self.df.columns:
                 self.df["time"] = np.arange(len(self.df)) / self.sample_rate
@@ -885,7 +926,7 @@ class IMUDataAnalyzer:
             plt.rcParams["axes.unicode_minus"] = False
 
             if "acc_z" in self.df.columns:
-                self.df["acc_z_corrected"] = self.df["acc_z"] - 9.80665
+                self.df["acc_z_corrected"] = self.df["acc_z"] - self.df["acc_z"].mean()  # 自适应去重力：减去Z轴实测均值（重力+零偏），兼容Z轴朝上/朝下安装
 
             fig, axes = plt.subplots(2, 3, figsize=(15, 10))
             axes_flat = axes.flatten()
@@ -2563,6 +2604,237 @@ class IMUDataAnalyzer:
             "method": method,
         }
 
+    # ----------------------------------------------------------------
+    # 数据完整性检测图（基于 frameCount 计数器；华依帧内无时间戳字段）
+    # ----------------------------------------------------------------
+    def plot_data_integrity(self):
+        """绘制数据完整性检测图并生成结论。
+
+        审计口径（均基于原始全量文件，不受掐头去尾影响）：
+        1. 坏帧（仅 bin 路径）：同步头异常 + Fletcher-16 校验和拒绝 +
+           其他解包失败 + 尾部不完整字节；CSV 为文本导出，无帧校验和概念；
+        2. 丢帧：frameCount 1~60000 循环计数器相邻正向步长 d>1 记为一处
+           缺口，推定缺失 d-1 帧；超过半个周期的跳变列为"不确定跳变"，
+           不计入缺帧总数；
+        3. 采样率：华依协议帧内无时间戳，采样率无法独立交叉验证，
+           仅报告用户配置值（与报告"采样率来源"口径一致）。
+        """
+        try:
+            plt.close("all")
+            plt.rcParams["font.family"] = "sans-serif"
+            plt.rcParams["font.sans-serif"] = list(_CN_FALLBACK_NAMES) + ["DejaVu Sans"]
+            plt.rcParams["axes.unicode_minus"] = False
+
+            src = getattr(self, "_integrity_source", None)
+            if not src or "frame_counts" not in src:
+                self.report_data["数据完整性图"] = (
+                    "未检测到 frameCount 帧计数列，无法进行完整性检测"
+                )
+                return None
+
+            counts = np.asarray(src["frame_counts"], dtype=np.int64)
+            quality = src.get("quality")
+            stats = src.get("stats", {})
+            data_source = src.get("source", "unknown")
+
+            gap_events = int(stats.get("gap_events", 0))
+            missing_frames = int(stats.get("missing_frames", 0))
+            gap_details = stats.get("gap_details", [])
+            gap_truncated = bool(stats.get("gap_details_truncated", False))
+            duplicate_pairs = int(stats.get("duplicate_pairs", 0))
+            ambiguous = int(stats.get("ambiguous_transitions", 0))
+            invalid_values = int(stats.get("invalid_values", 0))
+            wrap_count = int(stats.get("wrap_count", 0))
+
+            total_frames = int(len(counts))
+            steps = np.mod(np.diff(counts), FRAME_COUNTER_MODULUS)
+            anomaly_mask = (steps != 1) & (steps < FRAME_COUNTER_MODULUS // 2)
+
+            if quality:
+                total_slots = int(quality.get("binary_total_slots", 0))
+                valid_frames = int(quality.get("binary_valid_frames", 0))
+                bad_sync = int(quality.get("binary_bad_sync_frames", 0))
+                rejected = int(quality.get("binary_rejected_frames", 0))
+                trailing = int(quality.get("binary_trailing_bytes", 0))
+                bad_total = bad_sync + rejected
+            else:
+                total_slots = total_frames
+                valid_frames = total_frames
+                bad_sync = rejected = trailing = bad_total = 0
+
+            fig, axes = plt.subplots(2, 2, figsize=(16, 11))
+            fig.suptitle("数据完整性检测（基于 frameCount 计数器审计，原始全量文件）",
+                         fontsize=15, fontweight="bold")
+
+            idx = np.arange(len(counts))
+            t_axis = idx / self.sample_rate  # 按配置采样率换算的相对时间（推定）
+
+            # ── (0,0) 帧计数器原始值（含 1..60000 循环回绕） ──
+            ax = axes[0, 0]
+            stride = max(1, total_frames // 200000)
+            ax.plot(idx[::stride], counts[::stride], color="#1f77b4",
+                    linewidth=0.6, alpha=0.85,
+                    label=f"frameCount（{stride}点抽样，1~60000 循环）")
+            if np.any(anomaly_mask):
+                ax.plot(idx[1:][anomaly_mask], counts[1:][anomaly_mask], "r.",
+                        markersize=4, alpha=0.7,
+                        label=f"非 +1 步进点（{int(np.count_nonzero(anomaly_mask))} 处）")
+            ax.set_xlabel("帧行号")
+            ax.set_ylabel("frameCount")
+            ax.set_title("帧计数器序列（锯齿为 60000 循环回绕，属正常）",
+                         fontsize=11, fontweight="bold")
+            ax.legend(fontsize=8, loc="best")
+            ax.grid(True, alpha=0.3)
+
+            # ── (0,1) 计数器步长分布 ──
+            ax = axes[0, 1]
+            normal_steps = steps[steps == 1]
+            other_steps = steps[steps != 1]
+            ax.hist(normal_steps, bins=np.arange(0.5, 2.5, 0.1), color="#1f77b4",
+                    edgecolor="black", linewidth=0.3, label="正常步进 (+1)")
+            if len(other_steps):
+                ax.hist(other_steps, bins=np.arange(0.5, 2.5, 0.1), color="#e53e3e",
+                        edgecolor="black", linewidth=0.3, label="非 +1 步进")
+            ax.set_yscale("log")
+            ax.set_xlabel("计数器步长（模 60000）")
+            ax.set_ylabel("帧数（对数）")
+            ax.set_title("计数器步长分布", fontweight="bold")
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+
+            # ── (1,0) 累计接收帧数 vs 推定时间 ──
+            ax = axes[1, 0]
+            cum = np.arange(1, total_frames + 1)
+            stride2 = max(1, total_frames // 300000)
+            ax.plot(t_axis[::stride2], cum[::stride2], color="#1f77b4",
+                    linewidth=1.0, label="累计接收帧数")
+            ax.plot(t_axis[::stride2], t_axis[::stride2] * self.sample_rate,
+                    color="#2ca02c", linestyle="--", linewidth=1.0,
+                    label=f"理想连续线（{self.sample_rate:g} Hz，按配置推定）")
+            if gap_details:
+                # 真实数据常含数百处丢帧，画全 vlines 会过密；前 30 处示意即可
+                gap_t = [(g["frame_index"] + 1) / self.sample_rate for g in gap_details[:30]]
+                ax.vlines(gap_t, 0, total_frames, colors="red", linestyles=":",
+                          linewidth=0.5, alpha=0.4,
+                          label=f"丢帧位置（前 {min(len(gap_details), 30)} 处示意，共 {gap_events} 处）")
+            ax.set_xlabel("时间 (s)（按配置采样率推定）")
+            ax.set_ylabel("累计帧数")
+            ax.set_title("累计帧数增长与丢帧位置", fontweight="bold")
+            ax.legend(fontsize=8, loc="best")
+            ax.grid(True, alpha=0.3)
+
+            # ── (1,1) 结论摘要面板 ──
+            ax = axes[1, 1]
+            ax.axis("off")
+            if bad_total == 0 and gap_events == 0 and duplicate_pairs == 0:
+                verdict, verdict_color = "√ 数据完整：无坏帧、无丢帧", "#2ca02c"
+            elif bad_total == 0 and gap_events > 0:
+                verdict, verdict_color = f"! 无坏帧；检测到 {gap_events} 处丢帧缺口", "#e67e22"
+            else:
+                verdict, verdict_color = "! 检测到数据完整性问题，详见下列统计", "#e53e3e"
+
+            if data_source == "binary":
+                bad_line = (f"坏帧: 同步头异常 {bad_sync} / 校验和拒绝 {rejected} "
+                            f"（Fletcher-16 已启用）/ 尾部不完整字节 {trailing}")
+            else:
+                bad_line = "坏帧: CSV 为文本导出，无帧校验和概念（校验仅对 .bin 数据适用）"
+
+            if gap_events == 0:
+                gap_line = "丢帧: 未检测到丢帧（计数器全程 +1 步进）"
+            else:
+                ratio = stats.get("missing_ratio", float("nan"))
+                ratio_txt = f"，占推定完整时长 {ratio*100:.4f}%" if np.isfinite(ratio) else ""
+                gap_line = f"丢帧: 检测到 {gap_events} 处缺口，推定丢失 {missing_frames} 帧{ratio_txt}"
+                if rejected > 0:
+                    gap_line += f"（口径说明：其中包含校验和拒绝的 {rejected} 帧留下的计数空洞，与坏帧统计不叠加计数）"
+
+            lines = [
+                ("数据完整性检测结果", "title"),
+                (f"数据文件: {os.path.basename(self.file_path)}", "info"),
+                (f"数据来源: {'二进制 .bin' if data_source == 'binary' else 'CSV 文本导出'}", "info"),
+                (f"总帧数: {total_frames:,}（文件槽位 {total_slots:,}，有效解析 {valid_frames:,}）", "info"),
+                (bad_line, "warn" if bad_total else "info"),
+                (gap_line, "warn" if gap_events else "info"),
+                (f"重复计数对: {duplicate_pairs} 对（不计入缺帧）", "info"),
+                (f"计数器回绕次数: {wrap_count}（60000 循环，属正常）", "info"),
+                (f"不确定跳变: {ambiguous} 处（超半周期，未计入缺帧）；非法计数值: {invalid_values} 个", "info"),
+                (f"采样率: 配置 {self.sample_rate:g} Hz；协议帧内无时间戳，无法独立交叉验证", "info"),
+                ("", "info"),
+                (verdict, "verdict"),
+            ]
+            y = 0.98
+            for text, style in lines:
+                if style == "title":
+                    ax.text(0.02, y, text, fontsize=13, fontweight="bold",
+                            color="#2d3748", transform=ax.transAxes, va="top")
+                    y -= 0.075
+                elif style == "verdict":
+                    ax.text(0.02, y, text, fontsize=12.5, fontweight="bold",
+                            color=verdict_color, transform=ax.transAxes, va="top")
+                    y -= 0.06
+                else:
+                    color = "#e53e3e" if style == "warn" else "#4a5568"
+                    ax.text(0.02, y, text, fontsize=10, color=color,
+                            transform=ax.transAxes, va="top")
+                    y -= 0.055
+
+            # 丢帧明细（若有，最多列 8 条；更多见报告文字）
+            if gap_details:
+                y -= 0.01
+                ax.text(0.02, y, "丢帧明细（行号/计数器区间/缺失数）：", fontsize=9,
+                        fontweight="bold", color="#e53e3e", transform=ax.transAxes, va="top")
+                y -= 0.035
+                for g in gap_details[:8]:
+                    txt = (f"第 {g['frame_index']:,} 行后: frameCount {g['count_before']} → "
+                           f"{g['count_after']}，缺 {g['missing_frames']} 帧")
+                    if y < 0.04:  # 防止溢出
+                        ax.text(0.04, 0.02, "（明细超出图框，完整列表见报告）", fontsize=7.5,
+                                color="#a0aec0", transform=ax.transAxes, va="bottom")
+                        break
+                    ax.text(0.04, y, txt, fontsize=7.8, color="#4a5568",
+                            transform=ax.transAxes, va="top", family="sans-serif")
+                    y -= 0.028
+                shown = min(len(gap_details), 8)
+                note = f"（前 {shown} 条示意"
+                if gap_truncated or gap_events > shown:
+                    note += f"；共 {gap_events} 处，完整明细见报告文字"
+                note += "）"
+                ax.text(0.04, max(y, 0.01), note, fontsize=7.5, color="#718096",
+                        transform=ax.transAxes, va="top")
+                ax.text(0.02, 0.005,
+                        "推定缺失帧数 = 计数器步长 - 1；仅基于可观测计数跳变",
+                        fontsize=7, color="#a0aec0", transform=ax.transAxes, va="bottom")
+
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
+            save_path = os.path.join(self.save_dir, "08_数据完整性检测图.png")
+            plt.savefig(save_path, dpi=150, bbox_inches="tight")
+            plt.close("all")
+            self.report_data["数据完整性图"] = save_path
+
+            # ── 写入报告文字结论（自动出现在 HTML/MD 基本信息）──
+            self.report_data["完整性检测总帧数"] = (
+                f"{total_frames:,} 行（文件槽位 {total_slots:,}，有效解析 {valid_frames:,}）"
+            )
+            self.report_data["坏帧统计"] = bad_line
+            self.report_data["丢帧统计"] = gap_line
+            if gap_details:
+                detail_lines = [
+                    f"第 {g['frame_index']:,} 行后 frameCount {g['count_before']}→{g['count_after']}，"
+                    f"推定缺失 {g['missing_frames']} 帧（{g['missing_duration_s']:.3f} s）"
+                    for g in gap_details[:50]
+                ]
+                suffix = f"（共 {gap_events} 处，仅列前 {min(len(gap_details), 50)} 条）" \
+                    if gap_events > 50 else ""
+                self.report_data["丢帧明细"] = "；".join(detail_lines) + suffix
+            self.report_data["数据完整性结论"] = verdict
+            return save_path
+        except Exception as e:
+            print(f"数据完整性检测图生成失败: {e}")
+            import traceback as _tb
+            _tb.print_exc()
+            self.report_data["数据完整性图"] = f"生成失败: {e}"
+            return None
+
     def generate_html_report(self):
         """生成HTML报告"""
         try:
@@ -2687,6 +2959,7 @@ class IMUDataAnalyzer:
                 "Allan曲线数据", "Allan参数汇总",
                 "Allan结果", "时间序列图", "统计分布图", "Allan方差图", "Allan偏差图",
                 "PSD图", "相关性图", "漂移分析图", "落点半径对比图", "落点半径对比数据",
+                "数据完整性图",
             }
             for key, value in self.report_data.items():
                 if key not in hidden_report_keys:
@@ -2765,8 +3038,9 @@ class IMUDataAnalyzer:
                 ("Allan方差图", "3. Allan偏差与零偏分析图"),
                 ("PSD图", "4. 功率谱密度（PSD）分析图"),
                 ("相关性图", "5. 相关性分析图"),
-                ("漂移分析图", "6. 长期零漂趋势图"),
-                ("落点半径对比图", "7. 不同时间窗口1σ落点半径对比图")
+                ("数据完整性图", "6. 数据完整性检测图"),
+                ("漂移分析图", "7. 长期零漂趋势图"),
+                ("落点半径对比图", "8. 不同时间窗口1σ落点半径对比图")
             ]
 
             for key, title in image_keys:
@@ -2854,6 +3128,7 @@ class IMUDataAnalyzer:
                 "Allan曲线数据", "Allan参数汇总",
                 "Allan结果", "时间序列图", "统计分布图", "Allan方差图", "Allan偏差图",
                 "PSD图", "相关性图", "漂移分析图", "落点半径对比图", "落点半径对比数据",
+                "数据完整性图",
             }
             for key, value in self.report_data.items():
                 if key not in hidden_report_keys:
@@ -2923,8 +3198,9 @@ class IMUDataAnalyzer:
                 ("Allan方差图", "3. Allan偏差与零偏分析图"),
                 ("PSD图", "4. 功率谱密度（PSD）分析图"),
                 ("相关性图", "5. 相关性分析图"),
-                ("漂移分析图", "6. 长期零漂趋势图"),
-                ("落点半径对比图", "7. 不同时间窗口1σ落点半径对比图")
+                ("数据完整性图", "6. 数据完整性检测图"),
+                ("漂移分析图", "7. 长期零漂趋势图"),
+                ("落点半径对比图", "8. 不同时间窗口1σ落点半径对比图")
             ]
 
             for key, title in image_keys:
@@ -2991,6 +3267,7 @@ class IMUDataAnalyzer:
             ("绘制Allan偏差图", self.plot_allan_variance),
             ("绘制PSD图", self.plot_psd),
             ("绘制相关性分析图", self.plot_correlation),
+            ("绘制数据完整性检测图", self.plot_data_integrity),
             ("绘制漂移分析图", self.plot_drift),
             ("绘制落点半径对比图", self.plot_drift_radius_comparison),
             ("生成HTML报告", self.generate_html_report),
@@ -3106,6 +3383,7 @@ class IMUAnalysisApp:
             "✓ 相关性分析（热图）",
             "✓ 长期零漂趋势分析",
             "✓ 不同时间窗口1σ落点半径对比",
+            "✓ 数据完整性检测（基于frameCount的坏帧/丢帧审计，含明细）",
             "✓ 生成HTML和Markdown报告",
             "✓ 支持华依 ARU8010A 二进制格式 (.bin)"
         ]
