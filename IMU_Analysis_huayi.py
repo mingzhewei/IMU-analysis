@@ -2028,6 +2028,240 @@ class IMUDataAnalyzer:
     # ----------------------------------------------------------------
     # 功率谱密度 (PSD)
     # ----------------------------------------------------------------
+    # ----------------------------------------------------------------
+    # 09 Allan 噪声分项拟合图（N/B/K/R，供应商风格；独立功能）
+    # ----------------------------------------------------------------
+    def plot_allan_noise_fit(self):
+        """绘制 09 号 Allan 噪声分项拟合图。
+
+        独立功能：不改动既有 Allan 偏差图与参数提取逻辑，只复用同一份
+        ADEV 曲线并叠加 N/B/K/R 噪声分项虚线。
+        """
+        try:
+            plt.close("all")
+            plt.rcParams["font.family"] = "sans-serif"
+            plt.rcParams["font.sans-serif"] = list(_CN_FALLBACK_NAMES) + ["DejaVu Sans"]
+            plt.rcParams["axes.unicode_minus"] = False
+
+            G0 = 9.80665
+            fs = float(self.sample_rate)
+            flicker = float(np.sqrt(2.0 * np.log(2.0) / np.pi))
+
+            fig, axes = plt.subplots(2, 3, figsize=(25, 13.5))
+            fig.subplots_adjust(left=0.055, right=0.975, top=0.89, bottom=0.075,
+                                wspace=0.22, hspace=0.42)
+            order = ["acc_x", "acc_y", "acc_z", "gyro_x", "gyro_y", "gyro_z"]
+            axis_cn = {"x": "X轴", "y": "Y轴", "z": "Z轴"}
+
+            for i, col in enumerate(order):
+                ax = axes[i // 3][i % 3]
+                if col not in self.df.columns:
+                    ax.text(0.5, 0.5, "数据不足", ha="center", va="center",
+                            transform=ax.transAxes)
+                    continue
+
+                raw = self.df[col].to_numpy(dtype=np.float64, copy=False)
+                raw = raw[np.isfinite(raw)]
+                if len(raw) < 100:
+                    ax.text(0.5, 0.5, "数据不足", ha="center", va="center",
+                            transform=ax.transAxes)
+                    continue
+
+                is_gyro = col.startswith("gyro")
+                sensor, axname = col.split("_")
+
+                # 与主 Allan 图保持同一显示网格
+                taus_req = self._build_allan_display_tau_grid(
+                    len(raw), fs, self.ALLAN_DISPLAY_POINTS_PER_DECADE
+                )
+                taus, adev, _err, ns = at.adev(
+                    raw, rate=fs, data_type="freq", taus=taus_req
+                )
+                taus = np.asarray(taus, dtype=float)
+                adev = np.asarray(adev, dtype=float)
+                ns = np.asarray(ns, dtype=float)
+
+                # 绘图单位与供应商图一致：陀螺 °/h，加计 μg。
+                # ADEV 与 N/B/K/R 分项始终保持在同一绘图单位中。
+                if is_gyro:
+                    plot_factor = 3600.0
+                    y = adev * plot_factor
+                    y_label = r"$\sigma_A$ / (°/h)"
+                    n_unit = "°/√h"
+                    b_unit = "°/h"
+                    k_unit = "°/h^(3/2)"
+                    r_unit = "°/h²"
+                else:
+                    plot_factor = 1e6 / G0
+                    y = adev * plot_factor
+                    y_label = r"$\sigma_A$ / (μg)"
+                    n_unit = "m/s/√h"
+                    b_unit = "μg"
+                    k_unit = "(mm/s²)/√h"
+                    r_unit = "(mm/s²)/h"
+
+                ok = np.isfinite(taus) & np.isfinite(y) & (taus > 0) & (y > 0)
+                taus, y, ns = taus[ok], y[ok], ns[ok]
+                if len(taus) < 10:
+                    ax.text(0.5, 0.5, "有效点不足", ha="center", va="center",
+                            transform=ax.transAxes)
+                    continue
+
+                # N：0.1~10 s 白噪声平台区拟合，外推 tau=1 s
+                wn = (taus >= 0.1) & (taus <= 10.0) & (ns >= 3)
+                if np.count_nonzero(wn) >= 3:
+                    slope, intercept = np.polyfit(np.log10(taus[wn]),
+                                                  np.log10(y[wn]), 1)
+                    n_plot = float(10 ** intercept)
+                else:
+                    slope, intercept = np.nan, np.nan
+                    n_plot = np.nan
+
+                # B：tau>=1 s、n_terms>=20 的最低 ADEV
+                bp = (taus >= 1.0) & (ns >= 20)
+                if np.count_nonzero(bp) >= 1:
+                    idx = int(np.argmin(y[bp]))
+                    b_adev = float(y[bp][idx])
+                    b_plot = b_adev / flicker
+                else:
+                    b_adev = np.nan
+                    b_plot = np.nan
+
+                # K/R：扣除 N、B 后，在 tau>=10 s 残差上识别斜率。
+                # tau 使用秒，避免把绘图单位下的 N 错当成小时制 N。
+                tail = (taus >= 10.0) & (ns >= 5)
+                k_plot = np.nan
+                r_plot = np.nan
+                if np.count_nonzero(tail) >= 3 and np.isfinite(n_plot) and np.isfinite(b_plot):
+                    t_s = taus[tail]
+                    y_tail = y[tail]
+                    resid2 = np.maximum(
+                        y_tail ** 2 - n_plot ** 2 / t_s - (flicker * b_plot) ** 2,
+                        0.0,
+                    )
+                    resid = np.sqrt(resid2)
+                    valid = resid > 0
+                    if np.count_nonzero(valid) >= 3:
+                        sl, ic = np.polyfit(np.log10(t_s[valid]),
+                                            np.log10(resid[valid]), 1)
+                        if abs(sl - 0.5) <= 0.45:
+                            k_plot = float(10 ** ic * np.sqrt(3.0))
+                        elif abs(sl - 1.0) <= 0.45:
+                            r_plot = float(10 ** ic * np.sqrt(2.0))
+
+                # 合成拟合曲线：全部在绘图单位、tau 秒中计算。
+                tgrid = np.logspace(np.log10(max(float(taus.min()), 1e-3)),
+                                    np.log10(min(float(taus.max()), 1e3)), 400)
+                fit2 = np.zeros_like(tgrid)
+                if np.isfinite(n_plot):
+                    fit2 += n_plot ** 2 / tgrid
+                if np.isfinite(b_plot):
+                    fit2 += (flicker * b_plot) ** 2
+                if np.isfinite(k_plot):
+                    fit2 += k_plot ** 2 * tgrid / 3.0
+                if np.isfinite(r_plot):
+                    fit2 += r_plot ** 2 * tgrid ** 2 / 2.0
+                fit = np.sqrt(fit2)
+
+                # 画图：供应商风格
+                component_lines = {}
+                component_colors = {"N": "#b06cc2", "B": "#8fbe55",
+                                     "K": "#5da9e9", "R": "#d95f6a"}
+                ax.loglog(tgrid, fit, color="#00e600", lw=2.2, label="AVAR fitted",
+                          zorder=4)
+                ax.loglog(taus, y, color="magenta", lw=1.8, marker="o", ms=4.2,
+                          markerfacecolor="magenta", markeredgecolor="magenta",
+                          label="AVAR original", zorder=5)
+                if np.isfinite(n_plot):
+                    component_lines["N"] = n_plot / np.sqrt(tgrid)
+                if np.isfinite(b_plot):
+                    component_lines["B"] = np.full_like(tgrid, flicker * b_plot)
+                if np.isfinite(k_plot):
+                    component_lines["K"] = k_plot * np.sqrt(tgrid / 3.0)
+                if np.isfinite(r_plot):
+                    component_lines["R"] = r_plot * tgrid / np.sqrt(2.0)
+                for label, values in component_lines.items():
+                    ax.loglog(tgrid, values, "--", color=component_colors[label],
+                              lw=1.15, label=label, zorder=2)
+
+                displayed = np.concatenate([
+                    np.asarray(v, dtype=float).ravel()
+                    for v in ([y, fit] + list(component_lines.values()))
+                ])
+                displayed = displayed[np.isfinite(displayed) & (displayed > 0)]
+                if displayed.size:
+                    ax.set_ylim(max(np.nanmin(displayed) * 0.55, 1e-12),
+                                np.nanmax(displayed) * 1.8)
+                ax.set_xlim(1e-3, 1e3)
+                ax.set_xlabel(r"$\tau$ / s")
+                ax.set_ylabel(y_label)
+                ax.grid(True, which="both", ls=":", lw=0.5, alpha=0.65)
+                ax.legend(fontsize=8, loc="upper right", frameon=True)
+
+                # 参数文字框：仅对参数文字做单位换算；曲线本身不再二次换算。
+                if is_gyro:
+                    n_std = n_plot / 60.0 if np.isfinite(n_plot) else np.nan
+                    b_std = b_plot if np.isfinite(b_plot) else np.nan
+                    k_std = (k_plot * 60.0
+                             if np.isfinite(k_plot) else np.nan)
+                    r_std = (r_plot * 3600.0
+                             if np.isfinite(r_plot) else np.nan)
+                else:
+                    n_std = (n_plot / plot_factor * 60.0
+                             if np.isfinite(n_plot) else np.nan)
+                    b_std = b_plot if np.isfinite(b_plot) else np.nan
+                    ug_to_mmps2 = G0 * 1e-3
+                    k_std = (k_plot * ug_to_mmps2 * 60.0
+                             if np.isfinite(k_plot) else np.nan)
+                    r_std = (r_plot * ug_to_mmps2 * 3600.0
+                             if np.isfinite(r_plot) else np.nan)
+
+                text = (
+                    "N = %s %s\n"
+                    "B = %s %s\n"
+                    "K = %s %s\n"
+                    "R = %s %s"
+                ) % (
+                    ("%.6g" % n_std) if np.isfinite(n_std) else "N/A", n_unit,
+                    ("%.6g" % b_std) if np.isfinite(b_std) else "N/A", b_unit,
+                    ("%.6g" % k_std) if np.isfinite(k_std) else "N/A", k_unit,
+                    ("%.6g" % r_std) if np.isfinite(r_std) else "N/A", r_unit,
+                )
+                for label, values in component_lines.items():
+                    y_right = float(values[-1])
+                    if np.isfinite(y_right) and y_right > 0:
+                        ax.text(1.006, y_right, label, transform=ax.get_yaxis_transform(),
+                                fontsize=8.5, va="center", ha="left",
+                                color=component_colors[label], clip_on=False)
+                sensor_title = "%s%s" % (
+                    ("陀螺仪" if is_gyro else "加速度计"), axis_cn[axname]
+                )
+                parameter_title = text.replace("\n", ";  ")
+                ax.set_title(sensor_title + "\n" + parameter_title,
+                             fontsize=7.8, fontweight="normal", pad=6)
+
+            fig.suptitle(
+                "Allan 噪声分项拟合（N/B/K/R）  数据=%s  采样率=%.0f Hz  时长=%.1f s  "
+                "N=0.1~10 s 白噪声平台区外推 τ=1 s"
+                % (os.path.basename(self.file_path), fs,
+                   len(self.df) / fs),
+                fontsize=13,
+            )
+            save_path = os.path.join(self.save_dir, "09_Allan噪声分项拟合图.png")
+            fig.savefig(save_path, dpi=150)
+            plt.close("all")
+            self.report_data["Allan噪声分项拟合图"] = save_path
+            self.report_data["Allan噪声分项拟合说明"] = (
+                "09号图：品红点为实测ADEV；绿色线为N/B/K/R合成拟合；"
+                "灰色虚线为分项；N按0.1~10s白噪声平台区外推τ=1s；"
+                "K/R为长τ段模型估计，受记录长度限制。"
+            )
+        except Exception as e:
+            print(f"09号Allan噪声分项拟合图生成失败: {e}")
+            import traceback as _tb
+            _tb.print_exc()
+            self.report_data["Allan噪声分项拟合图"] = f"生成失败: {e}"
+
     def plot_psd(self):
         """绘制功率谱密度分析图（严格参考 IMU_Analysis_yuanshen.py）"""
         try:
@@ -2958,7 +3192,7 @@ class IMUDataAnalyzer:
                 "加速度计BS_10s单位", "陀螺仪BS_10s单位",
                 "Allan曲线数据", "Allan参数汇总",
                 "Allan结果", "时间序列图", "统计分布图", "Allan方差图", "Allan偏差图",
-                "PSD图", "相关性图", "漂移分析图", "落点半径对比图", "落点半径对比数据",
+                "PSD图", "相关性图", "漂移分析图", "落点半径对比图", "落点半径对比数据", "Allan噪声分项拟合图", "Allan噪声分项拟合说明",
                 "数据完整性图",
             }
             for key, value in self.report_data.items():
@@ -3040,7 +3274,8 @@ class IMUDataAnalyzer:
                 ("相关性图", "5. 相关性分析图"),
                 ("数据完整性图", "6. 数据完整性检测图"),
                 ("漂移分析图", "7. 长期零漂趋势图"),
-                ("落点半径对比图", "8. 不同时间窗口1σ落点半径对比图")
+                ("落点半径对比图", "8. 不同时间窗口1σ落点半径对比图"),
+                ("Allan噪声分项拟合图", "9. Allan噪声分项拟合图")
             ]
 
             for key, title in image_keys:
@@ -3127,7 +3362,7 @@ class IMUDataAnalyzer:
                 "加速度计BS_10s单位", "陀螺仪BS_10s单位",
                 "Allan曲线数据", "Allan参数汇总",
                 "Allan结果", "时间序列图", "统计分布图", "Allan方差图", "Allan偏差图",
-                "PSD图", "相关性图", "漂移分析图", "落点半径对比图", "落点半径对比数据",
+                "PSD图", "相关性图", "漂移分析图", "落点半径对比图", "落点半径对比数据", "Allan噪声分项拟合图", "Allan噪声分项拟合说明",
                 "数据完整性图",
             }
             for key, value in self.report_data.items():
@@ -3200,7 +3435,8 @@ class IMUDataAnalyzer:
                 ("相关性图", "5. 相关性分析图"),
                 ("数据完整性图", "6. 数据完整性检测图"),
                 ("漂移分析图", "7. 长期零漂趋势图"),
-                ("落点半径对比图", "8. 不同时间窗口1σ落点半径对比图")
+                ("落点半径对比图", "8. 不同时间窗口1σ落点半径对比图"),
+                ("Allan噪声分项拟合图", "9. Allan噪声分项拟合图")
             ]
 
             for key, title in image_keys:
@@ -3265,6 +3501,7 @@ class IMUDataAnalyzer:
             ("绘制时间序列图", self.plot_time_series),
             ("绘制统计分布图", self.plot_distribution),
             ("绘制Allan偏差图", self.plot_allan_variance),
+            ("绘制Allan噪声分项拟合图", self.plot_allan_noise_fit),
             ("绘制PSD图", self.plot_psd),
             ("绘制相关性分析图", self.plot_correlation),
             ("绘制数据完整性检测图", self.plot_data_integrity),
